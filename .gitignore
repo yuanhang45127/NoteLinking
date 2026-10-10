@@ -1,0 +1,26 @@
+# 用户数据（笔记库、设置、API Key、考试、标注）一律不入库
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 前端（后续添加）
+node_modules/
+dist/
+.vite/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
