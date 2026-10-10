@@ -57,6 +57,24 @@ def put_highlight(body: HighlightIn):
     return mask_settings(update_settings("highlight", updates))
 
 
+@router.put("/reader")
+def put_reader(body: dict):
+    allowed = {"selection_menu", "auto_concept", "context_scope"}
+    updates = {k: v for k, v in (body or {}).items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail=f"无有效字段，允许：{', '.join(sorted(allowed))}")
+    return mask_settings(update_settings("reader", updates))
+
+
+@router.put("/graph")
+def put_graph(body: dict):
+    allowed = {"default_filter", "show_missing"}
+    updates = {k: v for k, v in (body or {}).items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail=f"无有效字段，允许：{', '.join(sorted(allowed))}")
+    return mask_settings(update_settings("graph", updates))
+
+
 @router.put("/exam")
 def put_exam(body: ExamSettingsIn):
     updates = {k: v for k, v in body.model_dump().items() if v is not None}

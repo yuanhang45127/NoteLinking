@@ -1,0 +1,375 @@
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { api } from '../api'
+import { useApp } from '../store'
+import type { Provider, Settings } from '../types'
+import Modal from '../components/Modal'
+import { IconDownload, IconFilePdf, IconPlus, IconTrash } from '../components/Icons'
+
+const TABS = [
+  { key: 'general', label: '通用' },
+  { key: 'reader', label: '阅读与高亮' },
+  { key: 'model', label: 'AI 模型' },
+  { key: 'graph', label: '双链与图谱' },
+  { key: 'io', label: '导入与导出' },
+]
+
+const PRESET_COLORS = ['#fef08a', '#86efac', '#7dd3fc', '#f9a8d4', '#c4b5fd']
+const MASK = '••••••'
+
+export default function SettingsPage() {
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') || 'reader'
+  return (
+    <div className="settings-layout">
+      <nav className="settings-nav">
+        {TABS.map((t) => (
+          <button key={t.key} className={`nav-item ${tab === t.key ? 'active' : ''}`}
+            onClick={() => setParams({ tab: t.key })}>{t.label}</button>
+        ))}
+      </nav>
+      <div className="settings-panel">
+        {tab === 'reader' && <ReaderPanel />}
+        {tab === 'model' && <ModelPanel />}
+        {tab === 'graph' && <GraphPanel />}
+        {tab === 'io' && <IoPanel />}
+        {tab === 'general' && <GeneralPanel />}
+      </div>
+    </div>
+  )
+}
+
+/* ---------------- 阅读与高亮 ---------------- */
+function ReaderPanel() {
+  const { settings, refreshSettings, toast } = useApp()
+  const [hl, setHl] = useState<Settings['highlight']>({ color: '#fef08a', style: 'background' })
+  const [reader, setReader] = useState<Settings['reader']>({ selection_menu: true, auto_concept: true, context_scope: 'section' })
+  const [dirty, setDirty] = useState(false)
+
+  useEffect(() => {
+    if (!settings) return
+    setHl(settings.highlight)
+    setReader(settings.reader)
+  }, [settings])
+
+  const update = (patch: Partial<Settings['highlight']> | Partial<Settings['reader']>, kind: 'hl' | 'rd') => {
+    if (kind === 'hl') setHl((s) => ({ ...s, ...patch }))
+    else setReader((s) => ({ ...s, ...patch }))
+    setDirty(true)
+  }
+
+  const save = async () => {
+    try {
+      await api.saveHighlight(hl)
+      await api.saveReader(reader)
+      await refreshSettings()
+      setDirty(false)
+      toast('设置已保存')
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const sampleStyle: React.CSSProperties = hl.style === 'font'
+    ? { color: hl.color, fontWeight: 700 }
+    : { background: `color-mix(in srgb, ${hl.color} 62%, white)`, borderRadius: 3, padding: '1px 2px' }
+
+  return (
+    <>
+      <div className="settings-card">
+        <h3>高亮样式</h3>
+        <div className="desc">阅读时写下的想法与批注，会按此样式在笔记中自动高亮</div>
+        <div className="field-label">高亮颜色</div>
+        <div className="color-row">
+          {PRESET_COLORS.map((c) => (
+            <button key={c} className={`color-dot ${hl.color === c ? 'sel' : ''}`} style={{ background: c }}
+              onClick={() => update({ color: c }, 'hl')} />
+          ))}
+        </div>
+        <div className="field-label">高亮方式</div>
+        <div className="style-cards">
+          <button className={`style-card ${hl.style === 'background' ? 'sel' : ''}`} onClick={() => update({ style: 'background' }, 'hl')}>
+            <span className="radio" /> 背景高亮
+            <span className="sample" style={{ background: `color-mix(in srgb, ${hl.color} 62%, white)`, borderRadius: 3, padding: '1px 4px' }}>示例文字</span>
+          </button>
+          <button className={`style-card ${hl.style === 'font' ? 'sel' : ''}`} onClick={() => update({ style: 'font' }, 'hl')}>
+            <span className="radio" /> 字体高亮
+            <span className="sample" style={{ color: hl.color, fontWeight: 700 }}>示例文字</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-card">
+        <h3>实时预览</h3>
+        <div className="preview-box" style={{ marginTop: 10 }}>
+          训练前先确定损失函数。
+          <span style={sampleStyle}>我的理解：前向传播负责"算答案"，反向传播负责"改错"，两者交替直到收敛。</span>
+          两者交替直到收敛。
+        </div>
+      </div>
+
+      <div className="settings-card">
+        <h3>选段提问与概念文档</h3>
+        <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div>
+            <div className="sl-text">选中文字时弹出提问菜单（什么意思 / 解释选段 / 高亮）</div>
+          </div>
+          <Toggle checked={reader.selection_menu} onChange={(v) => update({ selection_menu: v }, 'rd')} />
+        </div>
+        <div className="setting-line">
+          <div>
+            <div className="sl-text">「什么意思」的结果自动生成概念文档，并加入双链与图谱</div>
+          </div>
+          <Toggle checked={reader.auto_concept} onChange={(v) => update({ auto_concept: v }, 'rd')} />
+        </div>
+        <div className="setting-line" style={{ borderTop: '1px solid var(--border)' }}>
+          <div className="sl-text">默认携带上下文范围</div>
+          <select className="select-input" value={reader.context_scope}
+            onChange={(e) => update({ context_scope: e.target.value }, 'rd')}>
+            <option value="sentence">当前句子</option>
+            <option value="section">当前小节</option>
+            <option value="note">整篇笔记</option>
+          </select>
+        </div>
+      </div>
+
+      <SaveBar dirty={dirty} onSave={save} />
+    </>
+  )
+}
+
+/* ---------------- AI 模型 ---------------- */
+function ModelPanel() {
+  const { settings, refreshSettings, toast } = useApp()
+  const [providers, setProviders] = useState<Provider[]>([])
+  const [active, setActive] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const [testing, setTesting] = useState('')
+
+  useEffect(() => {
+    if (!settings) return
+    setProviders(settings.providers.map((p) => ({ ...p, api_key: p.has_key ? MASK : '' })))
+    setActive(settings.active_provider)
+  }, [settings])
+
+  const update = (i: number, patch: Partial<Provider>) => {
+    setProviders((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)))
+    setDirty(true)
+  }
+
+  const save = async () => {
+    try {
+      await api.saveProviders(providers)
+      if (active) await api.setActive(active)
+      await refreshSettings()
+      setDirty(false)
+      toast('模型配置已保存')
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const test = async (p: Provider) => {
+    setTesting(p.id)
+    try {
+      await save()
+      const resp = await fetch('/api/llm/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: '回复"OK"' }], provider: p.id }),
+      })
+      if (resp.ok) toast(`「${p.name || p.id}」连接成功`)
+      else {
+        const data = await resp.json().catch(() => ({}))
+        toast(`连接失败：${data.detail || resp.status}`, 'err')
+      }
+    } catch (e: any) { toast(e.message, 'err') }
+    setTesting('')
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>AI 模型</h3>
+      <div className="desc">
+        支持所有主流接口：OpenAI 兼容（DeepSeek / Qwen / GLM / Kimi / OpenRouter / Ollama…）、Anthropic、Gemini。
+        API Key 留空表示保持不变。
+      </div>
+
+      {providers.map((p, i) => (
+        <div key={i} className="provider-card">
+          <div className="provider-grid">
+            <div>
+              <label>名称</label>
+              <input className="text-input" value={p.name} placeholder="如 DeepSeek"
+                onChange={(e) => update(i, { name: e.target.value })} />
+            </div>
+            <div>
+              <label>接口类型</label>
+              <select className="select-input" style={{ width: '100%' }} value={p.type}
+                onChange={(e) => update(i, { type: e.target.value as Provider['type'] })}>
+                <option value="openai">OpenAI 兼容</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </div>
+            <div>
+              <label>Base URL（OpenAI 兼容时必填）</label>
+              <input className="text-input" value={p.base_url} placeholder="https://api.deepseek.com/v1"
+                onChange={(e) => update(i, { base_url: e.target.value })} />
+            </div>
+            <div>
+              <label>API Key {p.has_key && <span style={{ color: 'var(--ok)' }}>（已配置）</span>}</label>
+              <input className="text-input" type="password" value={p.api_key} placeholder={p.has_key ? '••••••（未修改）' : 'sk-...'}
+                onChange={(e) => update(i, { api_key: e.target.value })} />
+            </div>
+            <div>
+              <label>默认模型</label>
+              <input className="text-input" value={p.model} placeholder="deepseek-chat"
+                onChange={(e) => update(i, { model: e.target.value })} />
+            </div>
+            <div>
+              <label>操作</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn small" disabled={testing === p.id} onClick={() => test(p)}>
+                  {testing === p.id ? '测试中...' : '测试连接'}
+                </button>
+                <button className="btn small" style={{ color: 'var(--err)' }}
+                  onClick={() => { setProviders((ps) => ps.filter((_, j) => j !== i)); setDirty(true) }}>
+                  <IconTrash size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+          <label className="check-row" style={{ marginTop: 8 }}>
+            <input type="radio" name="active-provider" checked={active === p.id}
+              onChange={() => { setActive(p.id); setDirty(true) }} />
+            设为默认模型
+          </label>
+        </div>
+      ))}
+
+      <button className="btn" onClick={() => {
+        setProviders((ps) => [...ps, { id: `provider-${Date.now()}`, type: 'openai', name: '', base_url: '', api_key: '', model: '' }])
+        setDirty(true)
+      }}><IconPlus size={15} /> 添加服务商</button>
+
+      <SaveBar dirty={dirty} onSave={save} />
+    </div>
+  )
+}
+
+/* ---------------- 双链与图谱 ---------------- */
+function GraphPanel() {
+  const { settings, refreshSettings, toast } = useApp()
+  const [g, setG] = useState<Settings['graph']>({ default_filter: 'all', show_missing: true })
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => { if (settings) setG(settings.graph) }, [settings])
+
+  const save = async () => {
+    try { await api.saveGraph(g); await refreshSettings(); setDirty(false); toast('已保存') }
+    catch (e: any) { toast(e.message, 'err') }
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>双链与图谱</h3>
+      <div className="desc">知识图谱由全库 [[双链]] 与概念文档自动生成，无需手动维护。</div>
+      <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="sl-text">默认筛选</div>
+        <select className="select-input" value={g.default_filter} onChange={(e) => { setG({ ...g, default_filter: e.target.value as any }); setDirty(true) }}>
+          <option value="all">全部</option>
+          <option value="note">笔记</option>
+          <option value="term">概念</option>
+        </select>
+      </div>
+      <div className="setting-line">
+        <div>
+          <div className="sl-text">显示悬空链接节点</div>
+          <div className="sl-sub">写了 [[链接]] 但还没创建文档的概念，以虚线节点出现在图谱中</div>
+        </div>
+        <Toggle checked={g.show_missing} onChange={(v) => { setG({ ...g, show_missing: v }); setDirty(true) }} />
+      </div>
+      <SaveBar dirty={dirty} onSave={save} />
+    </div>
+  )
+}
+
+/* ---------------- 导入与导出 ---------------- */
+function IoPanel() {
+  const { activeTopic, refreshTree, toast } = useApp()
+  return (
+    <div className="settings-card">
+      <h3>导入与导出</h3>
+      <div className="desc">笔记的底层就是 Markdown 文件，随时可迁移、可备份。</div>
+      <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div>
+          <div className="sl-text">导入 PDF（自动转文本笔记）</div>
+          <div className="sl-sub">导入到主题「{activeTopic || '（先选择主题）'}」，扫描件暂不支持</div>
+        </div>
+        <label className="btn" style={{ cursor: 'pointer' }}>
+          <IconFilePdf size={15} /> 选择 PDF
+          <input type="file" accept="application/pdf" style={{ display: 'none' }}
+            onChange={async (e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              if (!f) return
+              if (!activeTopic) { toast('请先在左侧选择主题', 'err'); return }
+              try {
+                const created = await api.importPdf(f, activeTopic, f.name.replace(/\.pdf$/i, ''))
+                toast(`已导入：${created.name}（${created.pages} 页）`)
+                refreshTree()
+              } catch (e: any) { toast(e.message, 'err') }
+            }} />
+        </label>
+      </div>
+      <div className="setting-line">
+        <div>
+          <div className="sl-text">导出全部笔记（zip）</div>
+          <div className="sl-sub">按主题打包全部 Markdown 文件</div>
+        </div>
+        <a className="btn" href={api.exportVaultUrl} download>
+          <IconDownload size={15} /> 导出
+        </a>
+      </div>
+    </div>
+  )
+}
+
+/* ---------------- 通用 ---------------- */
+function GeneralPanel() {
+  const { topics } = useApp()
+  return (
+    <div className="settings-card">
+      <h3>通用</h3>
+      <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="sl-text">界面语言</div>
+        <select className="select-input" defaultValue="zh">
+          <option value="zh">简体中文</option>
+        </select>
+      </div>
+      <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="sl-text">笔记存储</div>
+        <div className="sl-sub">本地 Markdown 文件库（data/vault），共 {topics.length} 个主题</div>
+      </div>
+      <div className="setting-line">
+        <div>
+          <div className="sl-text">快捷键</div>
+          <div className="sl-sub">n 笔记 · g 图谱 · e 考试 · s 设置</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ---------------- 小组件 ---------------- */
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="toggle">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span className="track" />
+    </label>
+  )
+}
+
+function SaveBar({ dirty, onSave }: { dirty: boolean; onSave: () => void }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <button className="btn primary" disabled={!dirty} onClick={onSave}>保存设置</button>
+    </div>
+  )
+}

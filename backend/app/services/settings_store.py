@@ -18,6 +18,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "active_provider": "",
     # 阅读器默认高亮样式
     "highlight": {"color": "#fef08a", "style": "background"},
+    # 阅读行为：划选菜单、「什么意思」自动建概念文档、携带上下文范围
+    "reader": {"selection_menu": True, "auto_concept": True, "context_scope": "section"},
+    # 图谱默认状态
+    "graph": {"default_filter": "all", "show_missing": True},
     # 考试备考默认参数
     "exam": {
         "default_count": 10,

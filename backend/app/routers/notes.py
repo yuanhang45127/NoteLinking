@@ -12,7 +12,32 @@ def read_note(path: str = Query(...)):
     note = vault.read_note(path)
     note["annotations"] = annotations_store.list_annotations(path)
     note["backlinks"] = vault.list_backlinks(path)
+    note["concept_refs"] = _concept_refs(note)
     return note
+
+
+def _concept_refs(note: dict) -> list:
+    """本文涉及的概念：概念文档名在正文中出现（纯文本或 [[双链]]）即算，带出现次数。
+
+    前端据此把正文中的纯文本概念名自动渲染为可悬浮/跳转的概念链接。
+    """
+    if note.get("type") != "note":
+        return []
+    from ..markdown_utils import extract_wiki_links
+
+    content = note["content"]
+    linked = set(extract_wiki_links(content))
+    refs = []
+    for info in vault.build_link_index().values():
+        if info["type"] != "term" or info["path"] == note["path"]:
+            continue
+        name = info["name"]
+        count = content.count(name)
+        if count == 0 and name not in linked:
+            continue
+        refs.append({"name": name, "path": info["path"], "count": max(count, 1)})
+    refs.sort(key=lambda r: -r["count"])
+    return refs
 
 
 @router.post("/notes")

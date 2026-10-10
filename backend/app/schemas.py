@@ -87,6 +87,16 @@ class AskRequest(BaseModel):
     save_to_note: bool = Field(False, description="把这次问答追加保存到笔记末尾")
 
 
+class TutorChatRequest(BaseModel):
+    paths: List[str] = Field(..., description="AI 助教可用的资料（笔记/概念文档）")
+    messages: List[ChatMessage]
+    language: str = "zh"
+    stream: bool = True
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+
+
 class TermRequest(BaseModel):
     path: str
     term: str

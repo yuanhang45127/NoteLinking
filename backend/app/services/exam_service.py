@@ -24,7 +24,7 @@ def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-def _gather_context(paths: List[str]) -> str:
+def gather_context(paths: List[str]):
     if not paths:
         raise HTTPException(status_code=400, detail="请至少选择一篇笔记作为出题范围")
     chunks, total = [], 0
@@ -95,7 +95,7 @@ async def generate_exam(
     provider_id: str = "",
     model: str = "",
 ) -> Dict:
-    context, used_titles = _gather_context(paths)
+    context, used_titles = gather_context(paths)
     messages = _build_exam_prompt(context, types, max(1, min(count, 50)), difficulty, language)
     raw = await complete(provider_id, messages, model)
     data = extract_json(raw)
@@ -261,7 +261,7 @@ def list_attempts(exam_id: str) -> List[Dict]:
 
 async def generate_study_guide(paths: List[str], language: str = "zh", provider_id: str = "", model: str = "") -> str:
     """NotebookLM 风格学习指南：核心概念、公式、易错点、考点预测、记忆技巧。"""
-    context, used = _gather_context(paths)
+    context, used = gather_context(paths)
     lang = "中文" if language == "zh" else language
     system = "你是学习教练，输出 GitHub 风格 Markdown 学习指南，公式用 LaTeX（$...$ / $$...$$）。"
     user = (
@@ -283,3 +283,73 @@ __all__ = [
     "generate_exam", "list_exams", "get_exam", "delete_exam",
     "submit_attempt", "list_attempts", "generate_study_guide",
 ]
+
+
+# ---------------------------------------------------------------- 考点清单
+def _checklist_file(topic: str) -> Path:
+    from ..utils import sanitize_filename
+
+    d = get_exams_dir().parent / "checklists"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{sanitize_filename(topic or 'default', 'default')}.json"
+
+
+async def generate_checklist(paths: List[str], language: str = "zh", provider_id: str = "", model: str = "") -> Dict:
+    """基于勾选资料生成考点清单（按重要度排序，可标记掌握情况）。"""
+    context, used = gather_context(paths)
+    lang = "中文" if language == "zh" else language
+    system = "你是命题专家，只输出一个 JSON 对象，不要其他文字或代码围栏。"
+    user = (
+        f"以下是我的备考资料（{', '.join(used)}），请提炼期末考试考点清单（{lang}）：\n\n"
+        f"{context}\n\n"
+        "要求：8-15 条考点，按重要度排序；输出格式：\n"
+        '{"points": [{"point": "考点描述", "importance": "高|中|低", '
+        '"suggestion": "一句话复习建议"}]}'
+    )
+    raw = await complete(provider_id, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+    data = extract_json(raw)
+    points = data.get("points") if isinstance(data, dict) else None
+    if not isinstance(points, list) or not points:
+        raise HTTPException(status_code=502, detail="模型未生成考点清单，请重试")
+    items = []
+    for i, pt in enumerate(points, 1):
+        items.append(
+            {
+                "id": f"p{i}",
+                "point": str(pt.get("point", "")).strip(),
+                "importance": pt.get("importance") or "中",
+                "suggestion": str(pt.get("suggestion", "")).strip(),
+                "mastered": False,
+            }
+        )
+    doc = {
+        "topic": paths[0].split("/")[0] if paths else "",
+        "scope": {"paths": paths, "titles": used},
+        "items": items,
+        "created_at": _now(),
+    }
+    f = _checklist_file(doc["topic"])
+    f.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    return doc
+
+
+def get_checklist(topic: str) -> Optional[Dict]:
+    f = _checklist_file(topic)
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def toggle_checklist_item(topic: str, item_id: str, mastered: bool) -> Dict:
+    doc = get_checklist(topic)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"尚未生成考点清单：{topic}")
+    for item in doc["items"]:
+        if item["id"] == item_id:
+            item["mastered"] = bool(mastered)
+            _checklist_file(topic).write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+            return doc
+    raise HTTPException(status_code=404, detail=f"考点不存在：{item_id}")

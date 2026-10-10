@@ -13,7 +13,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from ..markdown_utils import append_section, ensure_frontmatter
-from ..schemas import AskRequest, ChatRequest, GenerateNoteRequest, StudyGuideRequest
+from ..schemas import AskRequest, ChatRequest, GenerateNoteRequest, StudyGuideRequest, TutorChatRequest
 from ..services import vault
 from ..services.llm_service import LLMError, complete, stream_llm
 
@@ -154,6 +154,26 @@ async def ask(body: AskRequest):
         saved = vault.save_note(body.path, append_section(note["content"], heading, text))
         result["saved_path"] = saved["path"]
     return result
+
+
+@router.post("/tutor-chat")
+async def tutor_chat(body: TutorChatRequest):
+    """备考 AI 助教：把勾选的资料注入 system 上下文后对话（支持流式）。"""
+    from ..services.exam_service import gather_context
+
+    context, used = gather_context(body.paths)
+    lang = "中文" if body.language == "zh" else body.language
+    system = (
+        f"你是学生的备考 AI 助教。以下是学生勾选的资料（{', '.join(used)}），"
+        f"回答务必基于资料、直指考点，使用{lang}，公式用 LaTeX。\n\n{context}"
+    )
+    history = _msg_list(body.messages)[-12:]
+    messages = [{"role": "system", "content": system}] + history
+
+    if body.stream:
+        return _sse(_delta_gen(stream_llm(body.provider or "", messages, body.model or "", body.temperature)))
+    text = await complete(body.provider or "", messages, body.model or "", body.temperature)
+    return {"text": text}
 
 
 @router.post("/study-guide")
