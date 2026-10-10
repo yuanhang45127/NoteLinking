@@ -24,3 +24,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# TS 构建增量缓存
+tsconfig.tsbuildinfo
