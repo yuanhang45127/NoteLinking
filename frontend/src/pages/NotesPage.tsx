@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, getModelOverride, llmUrls, streamSSE } from '../api'
 import { useApp } from '../store'
@@ -51,32 +52,29 @@ export default function NotesPage() {
 
   const reload = async () => { await load(); refreshTree() }
 
+  // 各状态的内容主体（GenerateModal 在所有状态下都要挂载，放在最后统一渲染）
+  let body: ReactNode
   if (missing) {
-    return (
+    body = (
       <div className="empty-tip">
         <div className="big">笔记不存在或已被删除</div>
         <button className="btn small" onClick={() => setParams({})}>回到主题首页</button>
       </div>
     )
-  }
-  if (!activeTopic) {
-    return <div className="empty-tip"><div className="big">先在左侧新建或选择一个主题</div></div>
-  }
-  if (treeTopic !== activeTopic) {
+  } else if (!activeTopic) {
+    body = <div className="empty-tip"><div className="big">先在左侧新建或选择一个主题</div></div>
+  } else if (treeTopic !== activeTopic) {
     // 刚切换主题，目录还在加载：短暂留白，避免误显示“还没有笔记”
-    return null
-  }
-  if (!note) {
-    return (
+    body = null
+  } else if (!note) {
+    body = (
       <div className="empty-tip">
         <div className="big">这个主题还没有笔记</div>
         <button className="btn primary" onClick={() => openAiGenerate(navigate, activeTopic)}>✦ 用 AI 生成第一篇笔记</button>
       </div>
     )
-  }
-
-  return (
-    <>
+  } else {
+    body = (
       <ReaderView
         key={note.path}
         note={note}
@@ -86,6 +84,12 @@ export default function NotesPage() {
         toast={toast}
         tree={tree}
       />
+    )
+  }
+
+  return (
+    <>
+      {body}
       {genTopic && (
         <GenerateModal
           topic={genTopic}
