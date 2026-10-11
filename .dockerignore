@@ -1,0 +1,26 @@
+# 无关镜像构建的本地内容
+.git
+.gitignore
+.github
+data/
+docs/
+examples/
+scripts/
+*.md
+LICENSE
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+backend/.venv/
+backend/tests/
+.pytest_cache/
+
+# 前端（依赖与构建产物在镜像内生成）
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo/
+
+# 系统
+.DS_Store
+Thumbs.db

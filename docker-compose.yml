@@ -1,0 +1,18 @@
+services:
+  notelink:
+    build: .
+    image: notelink:latest
+    container_name: notelink
+    ports:
+      - "8000:8000"
+    volumes:
+      - notelink-data:/data        # 笔记库 / 用户 / 设置都在这里，备份这个卷即可
+    environment:
+      # 可选：部署访问令牌（账号体系之外的第二道门；不设则关闭）
+      # NOTEBOOK_TOKEN: "change-me"
+      # 可选：放在 HTTPS 反代后面时打开，给会话 Cookie 加 Secure 标记
+      # NOTEBOOK_COOKIE_SECURE: "1"
+    restart: unless-stopped
+
+volumes:
+  notelink-data:
