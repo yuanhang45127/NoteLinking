@@ -49,14 +49,17 @@ npm install && npm run dev       # http://localhost:5173，/api 自动代理到 
 
 ## 公网访问（已部署）
 
-服务已部署在阿里云 ECS（47.120.76.240），通过 nginx + 泛域名证书对外提供：
+服务已部署在阿里云 ECS（47.120.76.240），通过 nginx + 泛域名证书对外提供两个入口：
 
-**<https://notelink.obsidianlyh.top>**（首次打开输入访问令牌；本地 `data/` 与服务器数据相互独立）
+- **公网**：<https://notelink.obsidianlyh.top>（需访问令牌，首次打开输入一次）
+- **Tailnet 内**：<https://notelink-t.obsidianlyh.top>（**免令牌**，与 codex-t 等同一信任模型：只有 tailnet 成员能路由到 100.93.24.87；tailnet 内的设备/工具——包括本机的 AI 助手——均可直接访问）
+
+两个入口指向同一份数据。其余要点：
 
 - 服务器目录：`/opt/notelink`，数据在 `/opt/notelink/data`（笔记库/设置/标注都在里面，备份它即可）
 - 进程：`systemctl status notelink`（systemd 托管，开机自启、异常自动拉起）
-- 访问令牌：环境变量 `NOTEBOOK_TOKEN`（写入在 systemd unit 中）；本地不设置则不启用
-- 更新部署：本地 `git pull` 后重新 rsync `backend/app` 与 `frontend/dist` 并 `systemctl restart notelink`
+- 令牌与内网标记：systemd unit 中的 `NOTEBOOK_TOKEN` / `NOTEBOOK_TRUSTED_MARKER` 环境变量；本地不设置则不启用
+- 更新部署：本地改完后重新 rsync `backend/app` 与 `frontend/dist` 并 `systemctl restart notelink`
 
 ## 目录结构
 

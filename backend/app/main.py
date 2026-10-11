@@ -80,7 +80,14 @@ def health():
 # 设置环境变量 NOTEBOOK_TOKEN 后，所有 /api/*（除 /api/health）都需要携带令牌：
 #   请求头 X-Notebook-Token: <token>  或查询参数 ?token=<token>
 # 不设置则完全关闭校验（本地使用不受影响）。
+#
+# 内网免令牌：设置 NOTEBOOK_TRUSTED_MARKER 后，携带
+#   X-Notebook-Trusted: <marker>
+# 的请求跳过令牌校验。该标记头由内网 nginx 反代注入；对公网入口必须在
+# nginx 中显式置空（proxy_set_header X-Notebook-Trusted ""），
+# 否则公网客户端可自带该头绕过校验。
 _ACCESS_TOKEN = os.environ.get("NOTEBOOK_TOKEN", "").strip()
+_TRUSTED_MARKER = os.environ.get("NOTEBOOK_TRUSTED_MARKER", "").strip()
 
 
 @app.middleware("http")
@@ -88,13 +95,19 @@ async def token_guard(request: Request, call_next):
     if _ACCESS_TOKEN:
         path = request.url.path
         if path.startswith("/api") and path != "/api/health":
-            supplied = (
-                request.headers.get("x-notebook-token")
-                or request.query_params.get("token")
-                or ""
-            )
-            if not secrets.compare_digest(supplied, _ACCESS_TOKEN):
-                return JSONResponse(status_code=401, content={"detail": "需要访问令牌"})
+            if not (
+                _TRUSTED_MARKER
+                and secrets.compare_digest(
+                    request.headers.get("x-notebook-trusted") or "", _TRUSTED_MARKER
+                )
+            ):
+                supplied = (
+                    request.headers.get("x-notebook-token")
+                    or request.query_params.get("token")
+                    or ""
+                )
+                if not secrets.compare_digest(supplied, _ACCESS_TOKEN):
+                    return JSONResponse(status_code=401, content={"detail": "需要访问令牌"})
     return await call_next(request)
 
 
