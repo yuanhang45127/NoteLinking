@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from . import vault
 from ..markdown_utils import ensure_frontmatter
+from ..utils import sanitize_filename
 
 
 def extract_markdown(data: bytes, title: str) -> Tuple[str, int]:
@@ -46,7 +47,8 @@ def extract_markdown(data: bytes, title: str) -> Tuple[str, int]:
 
 
 async def import_pdf(data: bytes, filename: str, topic: str, name: str = "") -> dict:
-    title = (name or "").strip() or re.sub(r"\.pdf$", "", filename or "导入的 PDF", flags=re.I).strip() or "导入的 PDF"
+    raw = (name or "").strip() or re.sub(r"\.pdf$", "", filename or "导入的 PDF", flags=re.I).strip() or "导入的 PDF"
+    title = sanitize_filename(raw, "导入的 PDF")
     md, pages = extract_markdown(data, title)
     rel = f"{topic}/{title}.md"
     note = vault.create_note(rel, md, overwrite=False)

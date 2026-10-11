@@ -95,6 +95,7 @@ python scripts/seed_example.py
 | `NOTEBOOK_DATA_DIR` | 数据目录（默认 `./data`；Docker 镜像内为 `/data`） |
 | `NOTEBOOK_TOKEN` | 可选访问令牌，设置后所有 API 需携带（`X-Notebook-Token` 头或 `?token=`） |
 | `NOTEBOOK_COOKIE_SECURE` | `1` = 会话 Cookie 加 `Secure` 标记（HTTPS 反代后建议开启） |
+| `NOTEBOOK_CORS_ORIGINS` | 允许的跨域来源，逗号分隔（默认仅 Vite 开发服务器；前端同源托管时无需配置） |
 | `NOTEBOOK_TRUSTED_MARKER` | 可选内网免令牌标记，配合反代注入 `X-Notebook-Trusted` 头使用 |
 
 更细的公网部署（nginx + HTTPS + systemd）见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。

@@ -110,9 +110,20 @@ class UserContextMiddleware:
 
 app.add_middleware(UserContextMiddleware)
 
+# CORS：默认只放行 Vite 开发服务器——前端构建产物由本服务同源托管，生产不需要 CORS。
+# 前端若部署在其他域名，用 NOTEBOOK_CORS_ORIGINS 显式列出（逗号分隔），
+# 避免配合 allow_credentials 出现「反射任意 Origin」的过宽配置。
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        "NOTEBOOK_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 本地开发；后续前端上线可收紧
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
