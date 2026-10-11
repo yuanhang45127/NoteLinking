@@ -1,4 +1,4 @@
-"""备考目标存储：data/goals.json，如「机器学习期末 · 6 月 28 日」。"""
+"""备考目标存储：users/<用户>/goals.json，如「机器学习期末 · 6 月 28 日」。"""
 import datetime
 import json
 import uuid
@@ -6,11 +6,11 @@ from typing import Dict, List
 
 from fastapi import HTTPException
 
-from ..config import get_data_dir
+from ..config import get_user_data_dir
 
 
 def _file():
-    return get_data_dir() / "goals.json"
+    return get_user_data_dir() / "goals.json"
 
 
 def _now() -> str:

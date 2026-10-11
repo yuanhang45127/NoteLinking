@@ -3,6 +3,7 @@
 启动：cd backend && python run.py
 文档：http://127.0.0.1:8000/docs （Swagger UI）
 """
+import json
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -14,9 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import get_annotations_dir, get_exams_dir, get_vault_dir
+from . import config
+from .config import get_annotations_dir, get_checklists_dir, get_exams_dir, get_vault_dir
 from .routers import (
     annotations,
+    auth,
     exams,
     graph,
     importer,
@@ -27,23 +30,85 @@ from .routers import (
     terms,
     topics,
 )
+from .services import auth_service
 from .services.llm_service import LLMError
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    # 旧版单用户数据（data/vault…）自动迁移到 users/default，行为不变
+    auth_service.migrate_legacy_single_user()
     get_vault_dir()
     get_annotations_dir()
     get_exams_dir()
+    get_checklists_dir()
     yield
 
 
 app = FastAPI(
-    title="My Notebook API",
-    description="基于 Markdown 文件的笔记系统后端：笔记（大模型生成 + 高亮 + 词条双链）、知识图谱、考试备考。",
-    version="0.1.0",
+    title="NoteLink API",
+    description="基于 Markdown 的 AI 笔记系统：笔记（生成/高亮/概念双链）、知识图谱、考试备考。多人可用。",
+    version="0.3.0",
     lifespan=lifespan,
 )
+
+
+# ---------------- 用户上下文 + 多用户鉴权（纯 ASGI，确保 contextvar 对接口可见） ----------------
+_OPEN_PATHS = ("/api/health", "/api/auth/status")
+_OPEN_PREFIXES = ("/api/auth/",)
+
+
+def _cookie_from_scope(scope, name: str) -> str:
+    for h, v in scope.get("headers") or []:
+        if h.decode("latin-1").lower() == "cookie":
+            for part in v.decode("latin-1").split(";"):
+                k, _, val = part.strip().partition("=")
+                if k == name:
+                    return val
+    return ""
+
+
+async def _send_json(send, status: int, payload: dict):
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    await send({"type": "http.response.start", "status": status,
+                "headers": [(b"content-type", b"application/json; charset=utf-8"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+class UserContextMiddleware:
+    """解析会话 → 设置当前用户；多用户模式下未登录访问 /api/* 返回 401。"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope["path"]
+            method = scope.get("method", "GET")
+            token = _cookie_from_scope(scope, auth_service.SESSION_COOKIE)
+            if not token:
+                for h, v in scope.get("headers") or []:
+                    if h.decode("latin-1").lower() == "x-session":
+                        token = v.decode("latin-1")
+                        break
+            user = auth_service.resolve_session_token(token) or ""
+            config.set_current_user(user)
+
+            if (
+                method != "OPTIONS"
+                and path.startswith("/api")
+                and path not in _OPEN_PATHS
+                and not any(path.startswith(p) for p in _OPEN_PREFIXES)
+                and auth_service.users_count() > 0
+                and not user
+            ):
+                await _send_json(send, 401, {"detail": "请先登录"})
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(UserContextMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,6 +118,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(topics.router)
 app.include_router(notes.router)
 app.include_router(annotations.router)
@@ -94,7 +160,11 @@ _TRUSTED_MARKER = os.environ.get("NOTEBOOK_TRUSTED_MARKER", "").strip()
 async def token_guard(request: Request, call_next):
     if _ACCESS_TOKEN:
         path = request.url.path
-        if path.startswith("/api") and path != "/api/health":
+        if (
+            request.method != "OPTIONS"
+            and path.startswith("/api")
+            and path not in ("/api/health", "/api/auth/status")
+        ):
             if not (
                 _TRUSTED_MARKER
                 and secrets.compare_digest(

@@ -66,8 +66,54 @@ export default function TopBar() {
       <ModelPicker />
       <SearchBox />
       <button className="bell" title="通知"><IconBell /><span className="dot" /></button>
-      <div className="avatar" title="刘">刘</div>
+      <UserMenu />
     </header>
+  )
+}
+
+/* ---------------- 账号菜单 ---------------- */
+function UserMenu() {
+  const { user } = useApp()
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [])
+
+  // 单人开放模式（default）不显示账号 UI
+  if (!user || user === 'default') return null
+  const initial = Array.from(user)[0] || '?'
+
+  const logout = async () => {
+    try { await api.logout() } catch { /* 会话可能已过期 */ }
+    window.location.reload()
+  }
+
+  return (
+    <div style={{ position: 'relative' }} ref={boxRef}>
+      <button
+        className="avatar"
+        style={{ border: 'none', cursor: 'pointer', padding: 0 }}
+        title={`${user} · 账号`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {initial}
+      </button>
+      {open && (
+        <div className="sel-popover" style={{ right: 0, top: 'calc(100% + 8px)', minWidth: 180 }}>
+          <div className="hint" style={{ marginBottom: 10 }}>
+            <div style={{ fontWeight: 600, color: 'var(--text)', fontSize: 13 }}>{user}</div>
+            <div style={{ marginTop: 2 }}>数据与此账号隔离存储</div>
+          </div>
+          <button className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={logout}>退出登录</button>
+        </div>
+      )}
+    </div>
   )
 }
 

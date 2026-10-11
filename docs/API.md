@@ -1,9 +1,24 @@
-# My Notebook API 接口文档
+# NoteLink API 接口文档
 
 Base URL：`http://127.0.0.1:8000`（Swagger UI：`/docs`）
 
 所有路径均相对笔记库根目录 `data/vault/`，如 `高等数学/极限与连续.md`。
 流式接口使用 SSE，格式：`data: {"type":"delta","text":"…"}` → `{"type":"done"}` / `{"type":"error","message":"…"}`。
+
+## 账号（注册 / 登录 / 会话）
+
+- **单人开放模式**：`data/users.json` 为空（没人注册）时不要求登录，所有请求以 `default` 用户读写，与旧版单人使用完全兼容；
+- **多用户模式**：一旦有人注册，除 `/api/health` 与 `/api/auth/*` 外的所有 `/api/*` 需要会话，否则 401 `{"detail":"请先登录"}`；每个用户的笔记库/标注/考试/设置/目标完全隔离；
+- **会话**：登录/注册成功后通过 `Set-Cookie: nl_session=<token>`（HttpOnly，30 天）携带，也可用请求头 `X-Session: <token>`；口令 PBKDF2-HMAC-SHA256（20 万轮）存储；HTTPS 部署建议设 `NOTEBOOK_COOKIE_SECURE=1`；
+- **旧数据迁移**：启动时若发现旧版单用户数据（`data/vault` 等），自动合并迁移到 `users/default/`；首位注册者可勾选「接管已有数据」把它改名收编为自己的数据目录。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/auth/status` | `{mode: "open"\|"multi", user, users}`；前端据此决定是否弹登录框 |
+| POST | `/api/auth/register` | `{username, password, claim_existing?}` → 200 即登录；400 用户名/密码不合法，409 用户名已存在 |
+| POST | `/api/auth/login` | `{username, password}` → 200 `{username}`；401 用户名或密码不对 |
+| POST | `/api/auth/logout` | 清除会话 Cookie |
+| GET | `/api/health` | 健康检查（免鉴权） |
 
 ## 主题与目录树
 

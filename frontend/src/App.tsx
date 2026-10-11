@@ -1,27 +1,50 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import TopBar from './components/TopBar'
+import LoginGate from './components/LoginGate'
 import { useApp } from './store'
 import { api } from './api'
 import { LogoMark } from './components/Icons'
 
+type Gate = 'checking' | 'login' | 'token' | 'ok'
+
 export default function App() {
-  const { toasts } = useApp()
+  const { toasts, setUser, setAuthReady } = useApp()
+  const [gate, setGate] = useState<Gate>('checking')
   const location = useLocation()
   const navigate = useNavigate()
   const isGraph = location.pathname.startsWith('/graph')
 
-  // 访问令牌校验：后端设置了 NOTEBOOK_TOKEN 时，401 → 显示令牌输入页
-  const [authState, setAuthState] = useState<'checking' | 'ok' | 'need-token'>('checking')
+  const proceed = useCallback(() => {
+    setAuthReady(true)
+    setGate('ok')
+  }, [setAuthReady])
+
+  // 鉴权检查（两道门，按顺序）：
+  // 1. 账号门：多用户模式下未登录 → 登录/注册页；
+  // 2. 部署令牌门：后端设置了 NOTEBOOK_TOKEN 且未提供 → 令牌输入页。
+  // 单人开放模式（还没人注册）直接放行，与旧版行为一致。
   useEffect(() => {
-    api.settings()
-      .then(() => setAuthState('ok'))
-      .catch((e: & { code?: number }) => setAuthState(e?.code === 401 ? 'need-token' : 'ok'))
-  }, [])
+    let cancelled = false
+    api.authStatus()
+      .then(async (s) => {
+        if (cancelled) return
+        if (s.mode === 'multi' && !s.user) { setGate('login'); return }
+        setUser(s.user)
+        try {
+          await api.settings()
+          if (!cancelled) proceed()
+        } catch (e: any) {
+          if (!cancelled) setGate(e?.code === 401 ? 'token' : 'ok')
+        }
+      })
+      .catch(() => { if (!cancelled) proceed() }) // 后端不可达：照常进入，由页面自行提示
+    return () => { cancelled = true }
+  }, [proceed, setUser])
 
   // 快捷键：n 笔记 / g 图谱 / e 考试 / s 设置
-  // 注意：必须放在条件 return 之前，否则 hooks 顺序会随 authState 变化（React #310）
+  // 注意：必须放在条件 return 之前，否则 hooks 顺序会随 gate 变化（React #310）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName
@@ -34,8 +57,15 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [navigate])
 
-  if (authState === 'checking') return null
-  if (authState === 'need-token') return <TokenGate />
+  if (gate === 'checking') return null
+  if (gate === 'login') {
+    return (
+      <LoginGate
+        onOk={(u) => { setUser(u); proceed() }}
+      />
+    )
+  }
+  if (gate === 'token') return <TokenGate onOk={proceed} />
 
   return (
     <div className="app">
@@ -55,14 +85,14 @@ export default function App() {
   )
 }
 
-function TokenGate() {
+function TokenGate({ onOk }: { onOk: () => void }) {
   const [value, setValue] = useState('')
   const [err, setErr] = useState('')
   const submit = async () => {
     localStorage.setItem('nl-token', value.trim())
     try {
       await api.settings()
-      window.location.reload()
+      onOk()
     } catch {
       setErr('令牌不对，请重试')
       localStorage.removeItem('nl-token')

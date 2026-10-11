@@ -17,6 +17,12 @@ interface AppState {
   refreshSettings: () => Promise<void>
   toasts: Toast[]
   toast: (text: string, kind?: 'ok' | 'err') => void
+  /** 当前登录用户；null = 未登录，'default' = 单人开放模式（不显示账号 UI） */
+  user: string | null
+  setUser: (u: string | null) => void
+  /** 鉴权检查完成、可以开始拉数据（登录/令牌门通过后置 true） */
+  authReady: boolean
+  setAuthReady: (v: boolean) => void
 }
 
 const Ctx = createContext<AppState>(null as any)
@@ -31,6 +37,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [treeTopic, setTreeTopic] = useState('')
   const [settings, setSettings] = useState<Settings | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [user, setUser] = useState<string | null>(null)
+  const [authReady, setAuthReady] = useState(false)
 
   const toast = useCallback((text: string, kind: 'ok' | 'err' = 'ok') => {
     const id = Date.now() + Math.random()
@@ -80,15 +88,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try { setSettings(await api.settings()) } catch { /* 静默 */ }
   }, [])
 
-  useEffect(() => { refreshTopics(); refreshSettings() }, [refreshTopics, refreshSettings])
-  useEffect(() => { refreshTree() }, [refreshTree])
+  // 鉴权通过（authReady）后才开始拉数据，避免登录前打出一串 401 提示
+  useEffect(() => { if (authReady) { refreshTopics(); refreshSettings() } }, [authReady, refreshTopics, refreshSettings])
+  useEffect(() => { if (authReady) refreshTree() }, [authReady, refreshTree])
 
   const value = useMemo(
     () => ({
       topics, activeTopic, setActiveTopic, tree, treeTopic, refreshTree,
       refreshTopics, settings, refreshSettings, toasts, toast,
+      user, setUser, authReady, setAuthReady,
     }),
-    [topics, activeTopic, setActiveTopic, tree, treeTopic, refreshTree, refreshTopics, settings, refreshSettings, toasts, toast],
+    [topics, activeTopic, setActiveTopic, tree, treeTopic, refreshTree, refreshTopics, settings, refreshSettings, toasts, toast, user, authReady],
   )
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

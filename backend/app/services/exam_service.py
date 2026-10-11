@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 
 from fastapi import HTTPException
 
-from ..config import get_exams_dir
+from ..config import get_checklists_dir, get_exams_dir
 from ..markdown_utils import parse_frontmatter, strip_frontmatter
 from . import vault
 from .llm_service import complete, extract_json
@@ -289,7 +289,7 @@ __all__ = [
 def _checklist_file(topic: str) -> Path:
     from ..utils import sanitize_filename
 
-    d = get_exams_dir().parent / "checklists"
+    d = get_checklists_dir()
     d.mkdir(parents=True, exist_ok=True)
     return d / f"{sanitize_filename(topic or 'default', 'default')}.json"
 

@@ -127,6 +127,17 @@ export const api = {
   saveHighlight: (highlight: Settings['highlight']) => put<Settings>('/api/settings/highlight', highlight),
   saveReader: (reader: Settings['reader']) => put<Settings>('/api/settings/reader', reader),
   saveGraph: (graph: Settings['graph']) => put<Settings>('/api/settings/graph', graph),
+
+  // 账号（会话走 HttpOnly Cookie，无需手动携带）
+  authStatus: () =>
+    http<{ mode: 'open' | 'multi'; user: string | null; users: number }>('/api/auth/status'),
+  login: (username: string, password: string) =>
+    post<{ username: string }>('/api/auth/login', { username, password }),
+  register: (username: string, password: string, claimExisting: boolean) =>
+    post<{ username: string; claimed_existing?: boolean }>('/api/auth/register', {
+      username, password, claim_existing: claimExisting,
+    }),
+  logout: () => post<unknown>('/api/auth/logout', {}),
 }
 
 /** 全局模型选择（TopBar 切换）：nl-model = { provider, model }；provider 为空表示跟随默认服务商。 */
