@@ -47,6 +47,17 @@ npm install && npm run dev       # http://localhost:5173，/api 自动代理到 
 
 > 提示：仓库自带示例笔记（高等数学、机器学习，含概念文档），执行 `python scripts/seed_example.py` 导入后即可体验双链与图谱。注意 8000 端口如被其他服务占用，换 `--port` 即可。
 
+## 公网访问（已部署）
+
+服务已部署在阿里云 ECS（47.120.76.240），通过 nginx + 泛域名证书对外提供：
+
+**<https://notelink.obsidianlyh.top>**（首次打开输入访问令牌；本地 `data/` 与服务器数据相互独立）
+
+- 服务器目录：`/opt/notelink`，数据在 `/opt/notelink/data`（笔记库/设置/标注都在里面，备份它即可）
+- 进程：`systemctl status notelink`（systemd 托管，开机自启、异常自动拉起）
+- 访问令牌：环境变量 `NOTEBOOK_TOKEN`（写入在 systemd unit 中）；本地不设置则不启用
+- 更新部署：本地 `git pull` 后重新 rsync `backend/app` 与 `frontend/dist` 并 `systemctl restart notelink`
+
 ## 目录结构
 
 ```

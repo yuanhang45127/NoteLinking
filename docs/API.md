@@ -127,6 +127,21 @@ PUT /api/settings/providers
 
 ## 其他
 
-- `GET /api/health` → `{ok: true}`
+- `GET /api/health` → `{ok: true}`（无需令牌）
+- **访问令牌**：服务端设置环境变量 `NOTEBOOK_TOKEN` 后，除 `/api/health` 外所有 `/api/*` 需携带令牌（请求头 `X-Notebook-Token: <token>` 或查询参数 `?token=<token>`），否则 401；未设置则不校验（本地使用不受影响）。前端遇到 401 会弹出令牌输入页，令牌保存在浏览器 localStorage
 - 模型调用失败统一返回 `502 {"detail": "…"}`
 - 数据目录可用环境变量 `NOTEBOOK_DATA_DIR` 重定向（多开/备份用）
+
+## 公网部署（阿里云 ECS 实测）
+
+```bash
+# 服务器 /opt/notelink 目录结构
+#   backend/  frontend/dist  examples  scripts  data/
+# systemd：/etc/systemd/system/notelink.service
+#   Environment=NOTEBOOK_TOKEN=<令牌>
+#   Environment=NOTEBOOK_DATA_DIR=/opt/notelink/data
+#   ExecStart=/opt/notelink/backend/.venv/bin/python run.py --host 0.0.0.0 --port 8020
+# nginx：sites-enabled/notelink → 443 (泛域名证书) 反代 127.0.0.1:8020，
+#        client_max_body_size 60m，proxy_buffering off（SSE 流式必需）
+# 访问：https://notelink.obsidianlyh.top（输入令牌进入）
+```

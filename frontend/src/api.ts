@@ -5,17 +5,20 @@ import type {
 } from './types'
 
 async function http<T>(url: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(url, {
-    headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
-    ...init,
-  })
+  const headers: Record<string, string> = {}
+  if (init?.body) headers['Content-Type'] = 'application/json'
+  const token = localStorage.getItem('nl-token')
+  if (token) headers['X-Notebook-Token'] = token
+  const resp = await fetch(url, { ...init, headers: { ...headers, ...init?.headers } })
   if (!resp.ok) {
     let detail = `HTTP ${resp.status}`
     try {
       const data = await resp.json()
       detail = data.detail || detail
     } catch { /* ignore */ }
-    throw new Error(detail)
+    const err = new Error(detail) as Error & { code?: number }
+    err.code = resp.status
+    throw err
   }
   return resp.json()
 }
@@ -93,14 +96,22 @@ export const api = {
     form.append('file', file)
     form.append('topic', topic)
     form.append('name', name)
-    const resp = await fetch('/api/import/pdf', { method: 'POST', body: form })
+    const headers: Record<string, string> = {}
+    const token = localStorage.getItem('nl-token')
+    if (token) headers['X-Notebook-Token'] = token
+    const resp = await fetch('/api/import/pdf', { method: 'POST', body: form, headers })
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }))
       throw new Error(data.detail || '导入失败')
     }
     return resp.json() as Promise<NoteDetail & { pages: number }>
   },
-  exportVaultUrl: '/api/export/vault',
+  exportVaultUrl:
+    '/api/export/vault' +
+    (() => {
+      const t = localStorage.getItem('nl-token')
+      return t ? `?token=${encodeURIComponent(t)}` : ''
+    })(),
 
   // 设置
   settings: () => http<Settings>('/api/settings'),
@@ -123,9 +134,12 @@ export function streamSSE(
   const ctrl = new AbortController()
   ;(async () => {
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      const token = localStorage.getItem('nl-token')
+      if (token) headers['X-Notebook-Token'] = token
       const resp = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
         signal: ctrl.signal,
       })

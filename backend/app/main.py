@@ -3,11 +3,13 @@
 启动：cd backend && python run.py
 文档：http://127.0.0.1:8000/docs （Swagger UI）
 """
+import os
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -72,6 +74,28 @@ async def llm_error_handler(request, exc: LLMError):
 @app.get("/api/health", tags=["meta"])
 def health():
     return {"ok": True, "service": "my-notebook", "version": app.version}
+
+
+# ---------------- 访问令牌（部署到公网时用） ----------------
+# 设置环境变量 NOTEBOOK_TOKEN 后，所有 /api/*（除 /api/health）都需要携带令牌：
+#   请求头 X-Notebook-Token: <token>  或查询参数 ?token=<token>
+# 不设置则完全关闭校验（本地使用不受影响）。
+_ACCESS_TOKEN = os.environ.get("NOTEBOOK_TOKEN", "").strip()
+
+
+@app.middleware("http")
+async def token_guard(request: Request, call_next):
+    if _ACCESS_TOKEN:
+        path = request.url.path
+        if path.startswith("/api") and path != "/api/health":
+            supplied = (
+                request.headers.get("x-notebook-token")
+                or request.query_params.get("token")
+                or ""
+            )
+            if not secrets.compare_digest(supplied, _ACCESS_TOKEN):
+                return JSONResponse(status_code=401, content={"detail": "需要访问令牌"})
+    return await call_next(request)
 
 
 class SPAStaticFiles(StaticFiles):

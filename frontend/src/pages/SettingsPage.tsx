@@ -169,8 +169,11 @@ function ModelPanel() {
     setTesting(p.id)
     try {
       await save()
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      const token = localStorage.getItem('nl-token')
+      if (token) headers['X-Notebook-Token'] = token
       const resp = await fetch('/api/llm/chat', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers,
         body: JSON.stringify({ messages: [{ role: 'user', content: '回复"OK"' }], provider: p.id }),
       })
       if (resp.ok) toast(`「${p.name || p.id}」连接成功`)
