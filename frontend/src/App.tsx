@@ -20,10 +20,8 @@ export default function App() {
       .catch((e: & { code?: number }) => setAuthState(e?.code === 401 ? 'need-token' : 'ok'))
   }, [])
 
-  if (authState === 'checking') return null
-  if (authState === 'need-token') return <TokenGate />
-
   // 快捷键：n 笔记 / g 图谱 / e 考试 / s 设置
+  // 注意：必须放在条件 return 之前，否则 hooks 顺序会随 authState 变化（React #310）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName
@@ -35,6 +33,9 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [navigate])
+
+  if (authState === 'checking') return null
+  if (authState === 'need-token') return <TokenGate />
 
   return (
     <div className="app">
