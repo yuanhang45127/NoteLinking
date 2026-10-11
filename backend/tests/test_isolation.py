@@ -108,9 +108,12 @@ def test_exam_id_stays_in_user_dir_and_missing_is_404(client):
     assert f"{Path('../../users.json').name}.json" == "users.json.json"
     assert (get_exams_dir() / "users.json.json").parent == get_exams_dir()
     # 不存在的试卷（含穿越样式）返回 4xx，而不是 500 或读到全局文件
-    for eid in ("does-not-exist", "..%2F..%2Fusers.json", "%2e%2e%2fusers.json"):
+    for eid in ("does-not-exist", "%2e%2e%2fusers.json"):
         assert client.get(f"/api/exams/{eid}").status_code in (400, 404), eid
         assert client.delete(f"/api/exams/{eid}").status_code in (400, 404, 405), eid
+    # ..%2F 形式会被 HTTP 客户端规范化成普通路径（落到 SPA 首页），无论如何拿不到接口数据
+    r = client.get("/api/exams/..%2F..%2Fusers.json")
+    assert "questions" not in r.text
 
 
 def test_topic_name_sanitized(client, data_dir):

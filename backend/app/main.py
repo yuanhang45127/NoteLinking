@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException
 
 from . import config
 from .config import get_annotations_dir, get_checklists_dir, get_exams_dir, get_vault_dir
@@ -193,13 +194,23 @@ async def token_guard(request: Request, call_next):
 
 
 class SPAStaticFiles(StaticFiles):
-    """前端构建产物静态服务：未命中的路径回退到 index.html（SPA 路由）。"""
+    """前端构建产物静态服务：未命中的路径回退到 index.html（SPA 路由）。
+
+    兼容新旧 Starlette：旧版返回 404 响应，新版（≥0.33）抛 HTTPException(404)。
+    /api/* 不做 SPA 回退——接口 404 保持 JSON 404，避免误回 HTML。
+    """
 
     async def get_response(self, path: str, scope):
-        response = await super().get_response(path, scope)
-        if response.status_code == 404:
-            return await super().get_response("index.html", scope)
-        return response
+        fallback = not path.startswith("api/")
+        try:
+            response = await super().get_response(path, scope)
+            if response.status_code == 404 and fallback:
+                return await super().get_response("index.html", scope)
+            return response
+        except HTTPException as exc:
+            if exc.status_code == 404 and fallback:
+                return await super().get_response("index.html", scope)
+            raise
 
 
 # 前端 build 后由同一服务直接托管（backend/app → 仓库根/frontend/dist）

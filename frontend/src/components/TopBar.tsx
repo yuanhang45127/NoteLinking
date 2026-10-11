@@ -18,22 +18,23 @@ export default function TopBar() {
   }
 
   const parts: { label: string; to?: string; cur?: boolean }[] = []
+  const stripMd = (s: string) => s.replace(/\.md$/i, '')  // 面包屑里不显示 .md 后缀
   if (location.pathname.startsWith('/notes') || location.pathname === '/') {
     parts.push({ label: '笔记' })
     if (path) {
       const segs = path.split('/')
       segs.forEach((seg, i) => {
-        if (i === segs.length - 1) parts.push({ label: seg, cur: true })
-        else if (i === 0) parts.push({ label: label(seg) })
-        else parts.push({ label: seg })
+        if (i === segs.length - 1) parts.push({ label: stripMd(seg), cur: true })
+        else if (i === 0) parts.push({ label: label(stripMd(seg)) })
+        else parts.push({ label: stripMd(seg) })
       })
     } else if (activeTopic) parts.push({ label: label(activeTopic) })
   } else if (location.pathname.startsWith('/concept')) {
     parts.push({ label: '笔记', to: '/notes' })
     if (path) {
       const segs = path.split('/')
-      parts.push({ label: label(segs[0]) })
-      parts.push({ label: segs[segs.length - 1], cur: true })
+      parts.push({ label: label(stripMd(segs[0])) })
+      parts.push({ label: stripMd(segs[segs.length - 1]), cur: true })
     }
   } else if (location.pathname.startsWith('/graph')) {
     parts.push({ label: '知识图谱' })

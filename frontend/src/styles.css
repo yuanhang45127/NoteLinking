@@ -122,9 +122,17 @@ a { color: inherit; }
   display: flex; align-items: center; gap: 16px;
   padding: 0 26px; border-bottom: 1px solid var(--border);
 }
-.crumb { display: flex; align-items: center; gap: 8px; color: #6c7180; font-size: 14.5px; min-width: 0; }
-.crumb .sep { color: var(--muted-2); }
-.crumb .cur { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb {
+  display: flex; align-items: center; gap: 8px; color: #6c7180; font-size: 14.5px;
+  min-width: 0; flex: 1; overflow: hidden; white-space: nowrap;  /* 长路径不折行：整体收缩，逐段省略号 */
+}
+.crumb > span { min-width: 0; overflow: hidden; max-width: 18em; }  /* 单段过长先省略，不挤占别人 */
+.crumb > span:last-child { max-width: 30em; }  /* 当前页标题优先保持完整 */
+.crumb .sep { color: var(--muted-2); flex: none; }
+.crumb .cur, .crumb a, .crumb > span > span {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}  /* 段落可能是链接、当前页或普通 span，统一省略号收缩 */
+.crumb .cur { color: var(--text); font-weight: 600; }
 .crumb a { color: #6c7180; text-decoration: none; }
 .crumb a:hover { color: var(--primary); }
 .topbar .spacer { flex: 1; }
@@ -166,7 +174,7 @@ a { color: inherit; }
   display: inline-flex; align-items: center; gap: 7px;
   border: 1px solid var(--border); background: #fff; color: var(--text);
   border-radius: 10px; padding: 9px 16px; font-size: 13.5px; font-weight: 500;
-  transition: all 0.12s;
+  transition: all 0.12s; white-space: nowrap;  /* 按钮文字不换行 */
 }
 .btn:hover { border-color: #d8d9e2; background: #fafafc; }
 .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
