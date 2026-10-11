@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
 import type { Settings, Topic, TreeNode } from './types'
 
@@ -9,6 +9,8 @@ interface AppState {
   activeTopic: string
   setActiveTopic: (t: string) => void
   tree: TreeNode | null
+  /** 当前 tree 属于哪个主题；与 activeTopic 不一致说明目录还在加载 */
+  treeTopic: string
   refreshTree: () => Promise<void>
   refreshTopics: () => Promise<void>
   settings: Settings | null
@@ -26,6 +28,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     () => localStorage.getItem('nl-topic') || '',
   )
   const [tree, setTree] = useState<TreeNode | null>(null)
+  const [treeTopic, setTreeTopic] = useState('')
   const [settings, setSettings] = useState<Settings | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
 
@@ -55,12 +58,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('nl-topic', t)
   }, [])
 
+  const topicRef = useRef('')
+  topicRef.current = activeTopic
   const refreshTree = useCallback(async () => {
-    if (!activeTopic) { setTree(null); return }
+    const topic = activeTopic
+    if (!topic) { setTree(null); setTreeTopic(''); return }
     try {
-      setTree(await api.tree(activeTopic))
+      const t = await api.tree(topic)
+      if (topicRef.current !== topic) return // 期间已切到别的主题，丢弃过期结果
+      setTree(t)
+      setTreeTopic(topic)
     } catch (e: any) {
+      if (topicRef.current !== topic) return
       setTree(null)
+      setTreeTopic('')
       toast(`加载目录失败：${e.message}`, 'err')
     }
   }, [activeTopic, toast])
@@ -74,10 +85,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(
     () => ({
-      topics, activeTopic, setActiveTopic, tree, refreshTree,
+      topics, activeTopic, setActiveTopic, tree, treeTopic, refreshTree,
       refreshTopics, settings, refreshSettings, toasts, toast,
     }),
-    [topics, activeTopic, setActiveTopic, tree, refreshTree, refreshTopics, settings, refreshSettings, toasts, toast],
+    [topics, activeTopic, setActiveTopic, tree, treeTopic, refreshTree, refreshTopics, settings, refreshSettings, toasts, toast],
   )
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

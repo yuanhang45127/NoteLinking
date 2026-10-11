@@ -22,7 +22,7 @@ const COLORS: Record<string, { fill: string; stroke: string; text: string }> = {
 }
 
 export default function GraphPage() {
-  const { activeTopic, settings, toast } = useApp()
+  const { activeTopic, topics, settings, toast } = useApp()
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const [data, setData] = useState<GraphData | null>(null)
@@ -286,7 +286,7 @@ export default function GraphPage() {
         )}
 
         <div className="rail-card" style={{ marginTop: 16 }}>
-          <div className="rail-title"><IconLink size={16} /> 图谱统计 {activeTopic && `· ${activeTopic}`}</div>
+          <div className="rail-title"><IconLink size={16} /> 图谱统计 {activeTopic && `· ${topics.find((t) => t.name === activeTopic)?.emoji || ''} ${activeTopic}`}</div>
           <div className="stat-grid">
             <div className="stat-cell"><div className="v">{stats.nodes}</div><div className="k">节点</div></div>
             <div className="stat-cell"><div className="v purple">{stats.edges}</div><div className="k">双链</div></div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, llmUrls, streamSSE } from '../api'
+import { api, getModelOverride, llmUrls, streamSSE } from '../api'
 import { useApp } from '../store'
 import type { Attempt, ChatMsg, Checklist, Exam, Goal, Question, TreeNode } from '../types'
 import Modal from '../components/Modal'
@@ -100,7 +100,7 @@ export default function ExamPage() {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
     setMessages((m) => [...m, { role: 'assistant', content: '' }])
-    streamSSE(llmUrls.tutorChat, { paths: selectedPaths, messages: [...messages, { role: 'user', content: text }].slice(-10).map((x) => ({ role: x.role, content: x.content })), stream: true },
+    streamSSE(llmUrls.tutorChat, { paths: selectedPaths, messages: [...messages, { role: 'user', content: text }].slice(-10).map((x) => ({ role: x.role, content: x.content })), stream: true, ...getModelOverride() },
       (t) => setMessages((m) => { const c = [...m]; c[c.length - 1] = { ...c[c.length - 1], content: c[c.length - 1].content + t }; return c }),
       () => setBusy(false),
       (msg) => { setBusy(false); toast(msg, 'err') })

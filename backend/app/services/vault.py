@@ -1,11 +1,13 @@
 """笔记库服务：主题（顶层文件夹）、笔记（md 文件）、目录树、搜索、反链。
 
 库内约定：
-- 主题 = vault 下的顶层文件夹，可多层嵌套；
+- 主题 = vault 下的顶层文件夹，可多层嵌套；主题的 emoji 图标存在
+  文件夹内隐藏文件 .nl-topic.json（随主题重命名自动保留）；
 - 笔记 = 任意 .md 文件；
 - 词条解释文档 = 主题根下 terms/ 文件夹内的 md（frontmatter type: term）。
 """
 import datetime
+import json
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -50,6 +52,7 @@ def list_topics() -> List[Dict]:
                 {
                     "name": p.name,
                     "path": p.name,
+                    "emoji": get_topic_emoji(p.name),
                     "note_count": len(notes),
                     "term_count": sum(1 for n in notes if n.parent.name == "terms"),
                     "updated_at": _max_mtime(notes, p),
@@ -94,6 +97,34 @@ def rename_topic(old: str, new: str) -> Dict:
         raise HTTPException(status_code=409, detail=f"目标主题已存在：{dst.name}")
     src.rename(dst)
     return {"name": dst.name, "path": dst.name}
+
+
+# ---------------------------------------------------------------- 主题图标
+def get_topic_emoji(topic: str) -> str:
+    """读取主题 emoji（存于主题文件夹内 .nl-topic.json，重命名自动保留）。"""
+    try:
+        f = resolve_in(get_vault_dir(), topic) / ".nl-topic.json"
+    except HTTPException:
+        return ""
+    if not f.exists():
+        return ""
+    try:
+        return str((json.loads(f.read_text(encoding="utf-8")) or {}).get("emoji", ""))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return ""
+
+
+def set_topic_emoji(topic: str, emoji: str) -> Dict:
+    folder = resolve_in(get_vault_dir(), topic)
+    if not folder.is_dir():
+        raise HTTPException(status_code=404, detail=f"主题不存在：{topic}")
+    emoji = (emoji or "").strip()[:8]
+    f = folder / ".nl-topic.json"
+    if emoji:
+        f.write_text(json.dumps({"emoji": emoji}, ensure_ascii=False), encoding="utf-8")
+    elif f.exists():
+        f.unlink()
+    return {"name": folder.name, "emoji": emoji}
 
 
 # ---------------------------------------------------------------- 目录树

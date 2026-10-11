@@ -1,45 +1,51 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { api } from '../api'
+import { api, getModelOverride, setModelOverride } from '../api'
 import { useApp } from '../store'
 import { IconBell, IconSearch } from './Icons'
+import type { Provider } from '../types'
 
 export default function TopBar() {
-  const { activeTopic } = useApp()
+  const { activeTopic, topics } = useApp()
   const location = useLocation()
   const navigate = useNavigate()
   const params = new URLSearchParams(location.search)
   const path = params.get('path') || ''
+  const topicEmoji = (name: string) => topics.find((t) => t.name === name)?.emoji || ''
+  const label = (name: string) => {
+    const e = topicEmoji(name)
+    return e ? `${e} ${name}` : name
+  }
 
-  const parts: { label: string; to?: string }[] = []
+  const parts: { label: string; to?: string; cur?: boolean }[] = []
   if (location.pathname.startsWith('/notes') || location.pathname === '/') {
     parts.push({ label: '笔记' })
     if (path) {
       const segs = path.split('/')
       segs.forEach((seg, i) => {
-        if (i === segs.length - 1) parts.push({ label: seg })
-        else if (i === 0) parts.push({ label: seg })
+        if (i === segs.length - 1) parts.push({ label: seg, cur: true })
+        else if (i === 0) parts.push({ label: label(seg) })
         else parts.push({ label: seg })
       })
-    } else if (activeTopic) parts.push({ label: activeTopic })
+    } else if (activeTopic) parts.push({ label: label(activeTopic) })
   } else if (location.pathname.startsWith('/concept')) {
     parts.push({ label: '笔记', to: '/notes' })
     if (path) {
       const segs = path.split('/')
-      parts.push({ label: segs.slice(1, -1).filter((s) => s !== 'terms').join(' / ') || segs[0] })
-      parts.push({ label: segs[segs.length - 1], cur: true } as any)
+      parts.push({ label: label(segs[0]) })
+      parts.push({ label: segs[segs.length - 1], cur: true })
     }
   } else if (location.pathname.startsWith('/graph')) {
     parts.push({ label: '知识图谱' })
-    if (activeTopic) parts.push({ label: activeTopic, cur: true } as any)
+    if (activeTopic) parts.push({ label: label(activeTopic), cur: true })
   } else if (location.pathname.startsWith('/exam')) {
     parts.push({ label: '考试备考' })
-    if (activeTopic) parts.push({ label: activeTopic, cur: true } as any)
+    if (activeTopic) parts.push({ label: label(activeTopic), cur: true })
   } else if (location.pathname.startsWith('/settings')) {
     parts.push({ label: '设置' })
     const tab = params.get('tab')
     const names: Record<string, string> = { general: '通用', reader: '阅读与高亮', model: 'AI 模型', graph: '双链与图谱', io: '导入与导出' }
-    if (tab && names[tab]) parts.push({ label: names[tab], cur: true } as any)
+    if (tab && names[tab]) parts.push({ label: names[tab], cur: true })
   }
 
   return (
@@ -51,16 +57,68 @@ export default function TopBar() {
             {p.to ? (
               <a onClick={(e) => { e.preventDefault(); navigate(p.to!) }} href={p.to}>{p.label}</a>
             ) : (
-              <span className={'cur' in p && (p as any).cur ? 'cur' : ''}>{p.label}</span>
+              <span className={p.cur ? 'cur' : ''}>{p.label}</span>
             )}
           </span>
         ))}
       </nav>
       <div className="spacer" />
+      <ModelPicker />
       <SearchBox />
       <button className="bell" title="通知"><IconBell /><span className="dot" /></button>
       <div className="avatar" title="刘">刘</div>
     </header>
+  )
+}
+
+/* ---------------- 全局模型选择器 ---------------- */
+function ModelPicker() {
+  const { settings } = useApp()
+  const [, setVer] = useState(0) // 选择后强制刷新显示
+  const providers = (settings?.providers || []).filter(
+    (p: Provider) => (p.models && p.models.length) || p.model,
+  )
+  if (!providers.length) return null
+
+  const cur = getModelOverride()
+  const curValue = cur.model ? `${cur.provider || ''}::${cur.model}` : ''
+
+  const options: { value: string; label: string; group?: string }[] = []
+  for (const p of providers) {
+    const g = p.name || p.id
+    const seen = new Set<string>()
+    if (p.model) { seen.add(p.model); options.push({ value: `${p.id}::${p.model}`, label: `${p.model}（默认）`, group: g }) }
+    for (const m of p.models || []) {
+      if (seen.has(m)) continue
+      seen.add(m)
+      options.push({ value: `${p.id}::${m}`, label: m, group: g })
+    }
+  }
+  // 当前选择可能来自已被删除的服务商/模型，仍要显示出来避免 select 跳回默认
+  if (curValue && !options.some((o) => o.value === curValue)) {
+    options.unshift({ value: curValue, label: cur.model! })
+  }
+
+  return (
+    <select
+      className="select-input model-picker"
+      title="选择 AI 模型（对所有 AI 功能生效）"
+      value={curValue}
+      onChange={(e) => {
+        const v = e.target.value
+        if (!v) setModelOverride('', '')
+        else {
+          const idx = v.indexOf('::')
+          setModelOverride(v.slice(0, idx), v.slice(idx + 2))
+        }
+        setVer((x) => x + 1)
+      }}
+    >
+      <option value="">默认模型</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>{o.group ? `${o.group} · ${o.label}` : o.label}</option>
+      ))}
+    </select>
   )
 }
 

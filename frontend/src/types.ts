@@ -2,6 +2,7 @@
 export interface Topic {
   name: string
   path: string
+  emoji?: string
   note_count: number
   term_count: number
   updated_at: string
@@ -66,6 +67,7 @@ export interface Provider {
   base_url: string
   api_key: string
   model: string
+  models?: string[]
   has_key?: boolean
 }
 

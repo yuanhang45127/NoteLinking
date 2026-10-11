@@ -143,6 +143,8 @@ function ModelPanel() {
   const [active, setActive] = useState('')
   const [dirty, setDirty] = useState(false)
   const [testing, setTesting] = useState('')
+  const [fetching, setFetching] = useState('')
+  const [manual, setManual] = useState<Record<number, string>>({})
 
   useEffect(() => {
     if (!settings) return
@@ -163,6 +165,23 @@ function ModelPanel() {
       setDirty(false)
       toast('模型配置已保存')
     } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  /** 从服务商接口实时拉取可用模型列表（未保存的配置会先自动保存） */
+  const fetchModels = async (i: number) => {
+    const p = providers[i]
+    setFetching(p.id)
+    try {
+      await api.saveProviders(providers)
+      const { models } = await api.llmModels(p.id)
+      const next = providers.map((q, j) => (j === i ? { ...q, models } : q))
+      setProviders(next)
+      await api.saveProviders(next)
+      await refreshSettings()
+      setDirty(false)
+      toast(`已拉取 ${models.length} 个模型`)
+    } catch (e: any) { toast(e.message, 'err') }
+    setFetching('')
   }
 
   const test = async (p: Provider) => {
@@ -223,7 +242,11 @@ function ModelPanel() {
             <div>
               <label>默认模型</label>
               <input className="text-input" value={p.model} placeholder="deepseek-chat"
+                list={`models-dl-${p.id}`}
                 onChange={(e) => update(i, { model: e.target.value })} />
+              <datalist id={`models-dl-${p.id}`}>
+                {(p.models || []).map((m) => <option key={m} value={m} />)}
+              </datalist>
             </div>
             <div>
               <label>操作</label>
@@ -236,6 +259,46 @@ function ModelPanel() {
                   <IconTrash size={14} />
                 </button>
               </div>
+            </div>
+          </div>
+
+          {/* 可用模型列表：拉取后顶部选择器即可切换所有模型 */}
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <label style={{ fontSize: 13, color: 'var(--muted)' }}>
+                可用模型{p.models?.length ? `（${p.models.length}）` : ''}
+              </label>
+              <button className="btn small" disabled={fetching === p.id} onClick={() => fetchModels(i)}>
+                {fetching === p.id ? '拉取中...' : p.models?.length ? '重新拉取' : '拉取模型列表'}
+              </button>
+            </div>
+            {!!p.models?.length && (
+              <div className="model-chips">
+                {p.models.map((m) => (
+                  <span key={m} className={`chip ${p.model === m ? 'cur' : ''}`}>
+                    {m}
+                    <button title="移除" onClick={() => update(i, { models: p.models!.filter((x) => x !== m) })}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <input className="text-input" style={{ maxWidth: 260 }} placeholder="手动添加模型名，如 gpt-5.4"
+                value={manual[i] || ''}
+                onChange={(e) => setManual((s) => ({ ...s, [i]: e.target.value }))}
+                onKeyDown={(e) => {
+                  const v = (manual[i] || '').trim()
+                  if (e.key === 'Enter' && v && !p.models?.includes(v)) {
+                    update(i, { models: [...(p.models || []), v] }); setManual((s) => ({ ...s, [i]: '' }))
+                  }
+                }} />
+              <button className="btn small" disabled={!(manual[i] || '').trim()} onClick={() => {
+                const v = (manual[i] || '').trim()
+                if (v && !p.models?.includes(v)) { update(i, { models: [...(p.models || []), v] }); setManual((s) => ({ ...s, [i]: '' })) }
+              }}>添加</button>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
+              拉取的列表会出现在顶栏「模型选择器」里，随时为所有 AI 功能切换模型。
             </div>
           </div>
           <label className="check-row" style={{ marginTop: 8 }}>

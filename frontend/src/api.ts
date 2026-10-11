@@ -38,7 +38,13 @@ export const api = {
   // 主题 / 树
   topics: () => http<{ topics: Topic[] }>('/api/topics'),
   createTopic: (name: string) => post<Topic>('/api/topics', { name }),
+  setTopicEmoji: (name: string, emoji: string) =>
+    put<{ name: string; emoji: string }>(`/api/topics/${encodeURIComponent(name)}/emoji`, { emoji }),
   tree: (path = '') => http<TreeNode>(`/api/tree?${qs({ path })}`),
+
+  // 模型列表（从服务商接口实时拉取）
+  llmModels: (provider?: string) =>
+    http<{ models: string[] }>(`/api/llm/models?${qs({ provider })}`),
 
   // 笔记
   note: (path: string) => http<NoteDetail>(`/api/notes?${qs({ path })}`),
@@ -65,7 +71,7 @@ export const api = {
 
   // 词条
   createTerm: (body: { path: string; term: string; context_before?: string; context_after?: string; regenerate?: boolean }) =>
-    post<NoteDetail & { is_new: boolean }>('/api/terms', body),
+    post<NoteDetail & { is_new: boolean }>('/api/terms', { ...body, ...getModelOverride() }),
   resolveTerm: (name: string, topic?: string) =>
     http<{ found: boolean } & NoteDetail>(`/api/terms/resolve?${qs({ name, topic })}`),
 
@@ -74,16 +80,16 @@ export const api = {
 
   // 考试
   generateExam: (body: { paths: string[]; types: string[]; count: number; difficulty: string; title?: string }) =>
-    post<Exam>('/api/exams/generate', body),
+    post<Exam>('/api/exams/generate', { ...body, ...getModelOverride() }),
   getExam: (id: string) => http<Exam>(`/api/exams/${id}`),
   submitAttempt: (id: string, answers: { question_id: string; answer: string }[]) =>
-    post<Exam['attempts'] extends (infer T)[] | undefined ? T : never>(`/api/exams/${id}/attempts`, { answers }),
+    post<Exam['attempts'] extends (infer T)[] | undefined ? T : never>(`/api/exams/${id}/attempts`, { answers, ...getModelOverride() }),
   checklist: (topic: string) => http<{ checklist: Checklist | null }>(`/api/exams/checklist?${qs({ topic })}`),
-  generateChecklist: (paths: string[]) => post<Checklist>('/api/exams/checklist', { paths }),
+  generateChecklist: (paths: string[]) => post<Checklist>('/api/exams/checklist', { paths, ...getModelOverride() }),
   toggleChecklist: (topic: string, item_id: string, mastered: boolean) =>
     put<Checklist>(`/api/exams/checklist?${qs({ topic })}`, { item_id, mastered }),
   studyGuide: (paths: string[]) =>
-    post<{ markdown: string; saved_path?: string }>('/api/llm/study-guide', { paths }),
+    post<{ markdown: string; saved_path?: string }>('/api/llm/study-guide', { paths, ...getModelOverride() }),
 
   // 备考目标
   goals: () => http<{ goals: Goal[] }>('/api/goals'),
@@ -123,8 +129,23 @@ export const api = {
   saveGraph: (graph: Settings['graph']) => put<Settings>('/api/settings/graph', graph),
 }
 
-/** POST 并解析 SSE 流：onDelta 收增量文本，onDone 收结束事件。返回可中断控制器。 */
-export function streamSSE(
+/** 全局模型选择（TopBar 切换）：nl-model = { provider, model }；provider 为空表示跟随默认服务商。 */
+export function getModelOverride(): { provider?: string; model?: string } {
+  try {
+    const v = JSON.parse(localStorage.getItem('nl-model') || 'null')
+    if (v && typeof v.model === 'string' && v.model) {
+      return { provider: v.provider || undefined, model: v.model }
+    }
+  } catch { /* ignore */ }
+  return {}
+}
+
+export function setModelOverride(provider: string, model: string) {
+  if (model) localStorage.setItem('nl-model', JSON.stringify({ provider, model }))
+  else localStorage.removeItem('nl-model')
+}
+
+/** POST 并解析 SSE 流：onDelta 收增量文本，onDone 收结束事件。返回可中断控制器。 */export function streamSSE(
   url: string,
   body: unknown,
   onDelta: (text: string) => void,

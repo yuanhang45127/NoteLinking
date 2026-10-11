@@ -12,6 +12,7 @@ Base URL：`http://127.0.0.1:8000`（Swagger UI：`/docs`）
 | GET | `/api/topics` | 主题列表（侧边栏第一层），含笔记数 |
 | POST | `/api/topics` | 建主题 `{name}` |
 | PATCH | `/api/topics/{name}` | 重命名 `{name}` |
+| PUT | `/api/topics/{name}/emoji` | 设置主题 emoji 图标 `{emoji}`（空字符串清除）；存于主题文件夹内 `.nl-topic.json`，重命名自动保留；`GET /api/topics` 返回 `emoji` 字段 |
 | DELETE | `/api/topics/{name}?recursive=` | 删主题（有笔记需 `recursive=true`） |
 | GET | `/api/tree?path=` | 目录树（缺省=全库）；节点含 `type: dir/note/term` |
 

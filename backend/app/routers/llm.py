@@ -9,7 +9,7 @@ import datetime
 import json
 from typing import AsyncIterator, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from ..markdown_utils import append_section, ensure_frontmatter
@@ -51,6 +51,48 @@ def _msg_list(messages: List[Dict]) -> List[Dict]:
     return out
 
 
+@router.get("/models")
+async def list_models(provider: str = ""):
+    """拉取服务商的可用模型列表（OpenAI 兼容 / Anthropic / Gemini 三类协议）。"""
+    import httpx
+
+    from ..services.llm_service import DEFAULT_BASE_URLS, LLMError, get_provider
+
+    try:
+        p = get_provider(provider)
+    except LLMError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    ptype = (p.get("type") or "openai").lower()
+    base = (p.get("base_url") or DEFAULT_BASE_URLS.get(ptype, "")).rstrip("/")
+    key = p.get("api_key") or ""
+    if not base:
+        raise HTTPException(status_code=400, detail="服务商未配置 Base URL")
+    if ptype == "openai":
+        url, headers = f"{base}/models", {"Authorization": f"Bearer {key}"} if key else {}
+    elif ptype == "anthropic":
+        url = f"{base}/v1/models"
+        headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    else:  # gemini
+        url = f"{base}/v1beta/models"
+        headers = {"x-goog-api-key": key}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(url, headers=headers)
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"拉取模型列表失败：HTTP {resp.status_code} {resp.text[:200]}")
+        data = resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"拉取模型列表失败：{e}")
+    if ptype == "gemini":
+        models = [m.get("name", "").removeprefix("models/") for m in data.get("models") or []]
+    else:
+        models = [m.get("id", "") for m in data.get("data") or []]
+    models = sorted({m for m in models if m})
+    return {"models": models}
+
+
 @router.post("/chat")
 async def chat(body: ChatRequest):
     messages = _msg_list(body.messages)
@@ -84,7 +126,7 @@ async def generate_note(body: GenerateNoteRequest):
     if body.stream:
         async def gen():
             buf = []
-            async for delta in stream_llm("", messages):
+            async for delta in stream_llm(body.provider or "", messages, body.model or ""):
                 buf.append(delta)
                 yield {"type": "delta", "text": delta}
             if body.save_path:
@@ -95,7 +137,7 @@ async def generate_note(body: GenerateNoteRequest):
 
         return _sse(gen())
 
-    text = await complete("", messages)
+    text = await complete(body.provider or "", messages, body.model or "")
     result = {"text": text}
     if body.save_path:
         saved = _save_generated(title or body.prompt[:30], text, body.save_path, body.language)
@@ -134,7 +176,7 @@ async def ask(body: AskRequest):
     if body.stream:
         async def gen():
             buf = []
-            async for delta in stream_llm("", messages):
+            async for delta in stream_llm(body.provider or "", messages, body.model or ""):
                 buf.append(delta)
                 yield {"type": "delta", "text": delta}
             if body.save_to_note:
@@ -147,7 +189,7 @@ async def ask(body: AskRequest):
 
         return _sse(gen())
 
-    text = await complete("", messages)
+    text = await complete(body.provider or "", messages, body.model or "")
     result: Dict = {"text": text}
     if body.save_to_note:
         heading = f"问答记录（{datetime.datetime.now().isoformat(timespec='seconds')}）"

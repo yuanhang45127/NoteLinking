@@ -6,18 +6,31 @@ import {
   IconCaretDown, IconCheck, IconChevron, IconConcept, IconDoc, IconFolder,
   IconFolderOpen, IconGear, IconGraph, IconGrad, IconNote, IconPlus,
 } from './Icons'
+import Modal from './Modal'
 import type { TreeNode } from '../types'
+
+const EMOJI_CHOICES = [
+  '📚', '📖', '📝', '✏️', '🧮', '🔢', '🧠', '💡',
+  '🧪', '🔬', '🔭', '🌍', '🌌', '⚛️', '🧬', '🩺',
+  '⚖️', '🏛️', '💼', '📈', '📊', '🗺️', '🎨', '🎵',
+  '💻', '🤖', '⚙️', '🛠️', '🚀', '🎯', '🏆', '🧩',
+  '🌱', '🌿', '🌾', '🌊', '🏔️', '⭐', '🌙', '🔥',
+  '❄️', '🐧', '🦋', '♟️', '🎮', '🎬', '🔶', '✨',
+]
 
 export default function Sidebar() {
   const { topics, activeTopic, setActiveTopic, tree, refreshTopics, refreshTree, toast } = useApp()
   const [menuOpen, setMenuOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newTopic, setNewTopic] = useState('')
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const [custom, setCustom] = useState('')
   const location = useLocation()
   const navigate = useNavigate()
 
   const isGraphPage = location.pathname.startsWith('/graph')
   const currentPath = new URLSearchParams(location.search).get('path') || ''
+  const currentEmoji = topics.find((t) => t.name === activeTopic)?.emoji || ''
 
   const createTopic = async () => {
     const name = newTopic.trim()
@@ -28,6 +41,16 @@ export default function Sidebar() {
       await refreshTopics()
       setActiveTopic(name)
       toast(`已创建主题「${name}」`)
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const pickEmoji = async (emoji: string) => {
+    if (!activeTopic) return
+    try {
+      await api.setTopicEmoji(activeTopic, emoji)
+      await refreshTopics()
+      setEmojiOpen(false); setCustom('')
+      toast(emoji ? `「${activeTopic}」图标已设为 ${emoji}` : '图标已清除')
     } catch (e: any) { toast(e.message, 'err') }
   }
 
@@ -60,7 +83,9 @@ export default function Sidebar() {
       <div className="nav-label">主题</div>
       <div className="topic-select">
         <button className={`topic-btn ${menuOpen ? 'open' : ''}`} onClick={() => setMenuOpen((v) => !v)}>
-          <IconDoc size={17} /> <span>{activeTopic || '选择主题'}</span>
+          <IconDoc size={17} />
+          {currentEmoji && <span className="topic-emoji">{currentEmoji}</span>}
+          <span>{activeTopic || '选择主题'}</span>
           <span className="caret"><IconCaretDown size={15} /></span>
         </button>
         {menuOpen && (
@@ -69,11 +94,17 @@ export default function Sidebar() {
               <button key={t.path} className={t.name === activeTopic ? 'sel' : ''}
                 onClick={() => { setActiveTopic(t.name); setMenuOpen(false) }}>
                 {t.name === activeTopic ? <IconCheck size={15} /> : <span style={{ width: 15 }} />}
+                {t.emoji && <span className="topic-emoji">{t.emoji}</span>}
                 {t.name}
                 <span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 12 }}>{t.note_count}</span>
               </button>
             ))}
             {!topics.length && <div className="empty">还没有主题，先新建一个</div>}
+            <hr style={{ border: 0, borderTop: '1px solid var(--border)', margin: '6px 4px' }} />
+            <button disabled={!activeTopic} onClick={() => { setEmojiOpen(true); setMenuOpen(false); setCustom('') }}>
+              <span style={{ width: 15 }} />
+              {currentEmoji ? '更换图标' : '选择图标'} 🎨
+            </button>
           </div>
         )}
       </div>
@@ -101,6 +132,28 @@ export default function Sidebar() {
           </div>
         )}
       </div>
+
+      {emojiOpen && (
+        <Modal title={`「${activeTopic}」的图标`} onClose={() => setEmojiOpen(false)}
+          ops={<button className="btn" onClick={() => setEmojiOpen(false)}>关闭</button>}>
+          <div className="emoji-grid">
+            {EMOJI_CHOICES.map((e) => (
+              <button key={e} className={`emoji-cell ${currentEmoji === e ? 'sel' : ''}`}
+                onClick={() => pickEmoji(e)}>{e}</button>
+            ))}
+          </div>
+          <div className="field-label">自定义（粘贴任意 emoji）</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input className="text-input" style={{ flex: 1 }} placeholder="如 🧫"
+              value={custom} maxLength={8} onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && custom.trim() && pickEmoji(custom.trim())} />
+            <button className="btn primary" disabled={!custom.trim()} onClick={() => pickEmoji(custom.trim())}>使用</button>
+          </div>
+          {currentEmoji && (
+            <button className="btn text" style={{ marginTop: 12 }} onClick={() => pickEmoji('')}>清除当前图标</button>
+          )}
+        </Modal>
+      )}
     </aside>
   )
 }

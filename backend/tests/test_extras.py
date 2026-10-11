@@ -89,3 +89,41 @@ def test_export_vault(data_dir):
 
     z = zipfile.ZipFile(io.BytesIO(r.content))
     assert "T/a.md" in z.namelist()
+
+
+def test_topic_emoji(data_dir):
+    from app.services import vault as v
+
+    v.create_topic("ML")
+    assert v.get_topic_emoji("ML") == ""
+    r = v.set_topic_emoji("ML", "🤖")
+    assert r == {"name": "ML", "emoji": "🤖"}
+    assert v.get_topic_emoji("ML") == "🤖"
+    assert v.list_topics()[0]["emoji"] == "🤖"
+    # 清除
+    v.set_topic_emoji("ML", "")
+    assert v.get_topic_emoji("ML") == "" and v.list_topics()[0]["emoji"] == ""
+    # 不存在的主题
+    import pytest as _p
+    from fastapi import HTTPException as _H
+
+    with _p.raises(_H):
+        v.set_topic_emoji("不存在", "📚")
+    # 重命名后图标保留
+    v.set_topic_emoji("ML", "🧠")
+    v.rename_topic("ML", "机器学习")
+    assert v.get_topic_emoji("机器学习") == "🧠"
+
+
+def test_topic_emoji_api(data_dir):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        c.post("/api/topics", json={"name": "T"})
+        r = c.put("/api/topics/T/emoji", json={"emoji": "📚"})
+        assert r.status_code == 200 and r.json()["emoji"] == "📚"
+        assert c.get("/api/topics").json()["topics"][0]["emoji"] == "📚"
+        c.put("/api/topics/T/emoji", json={"emoji": ""})
+        assert c.get("/api/topics").json()["topics"][0]["emoji"] == ""

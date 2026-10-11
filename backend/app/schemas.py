@@ -13,6 +13,10 @@ class TopicRename(BaseModel):
     name: str
 
 
+class TopicEmoji(BaseModel):
+    emoji: str = ""
+
+
 class TopicDelete(BaseModel):
     recursive: bool = False
 
@@ -74,6 +78,8 @@ class GenerateNoteRequest(BaseModel):
     language: str = "zh"
     stream: bool = True
     save_path: Optional[str] = Field(None, description="生成后保存到的库内路径（如 主题/笔记.md）")
+    provider: Optional[str] = None
+    model: Optional[str] = None
 
 
 class AskRequest(BaseModel):
@@ -85,6 +91,8 @@ class AskRequest(BaseModel):
     language: str = "zh"
     stream: bool = True
     save_to_note: bool = Field(False, description="把这次问答追加保存到笔记末尾")
+    provider: Optional[str] = None
+    model: Optional[str] = None
 
 
 class TutorChatRequest(BaseModel):
@@ -142,6 +150,7 @@ class ProviderIn(BaseModel):
     base_url: str = ""
     api_key: str = ""
     model: str = ""
+    models: List[str] = Field(default_factory=list, description="可用模型列表（供前端下拉选择）")
 
 
 class ProvidersIn(BaseModel):
