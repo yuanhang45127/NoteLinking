@@ -189,8 +189,9 @@ export default function Sidebar() {
       </div>
       <div className="topic-select">
         <button className={`topic-btn ${menuOpen ? 'open' : ''}`} onClick={() => setMenuOpen((v) => !v)}>
-          <IconDoc size={17} />
-          {currentEmoji && <span className="topic-emoji">{currentEmoji}</span>}
+          {currentEmoji
+            ? <span className="topic-emoji">{currentEmoji}</span>
+            : <IconDoc size={17} />}
           <span>{activeTopic || '选择主题'}</span>
           <span className="caret"><IconCaretDown size={15} /></span>
         </button>
