@@ -156,3 +156,80 @@ def test_stream_error_propagates(client, data_dir, monkeypatch):
     r = client.post("/api/terms/stream", json={"path": "高数/矩阵.md", "term": "特征值"})
     events = _sse_events(r.text)
     assert events[-1]["type"] == "error" and "服务商不可用" in events[-1]["message"]
+
+
+def test_attempt_stream_grades_progressively(client, data_dir, monkeypatch):
+    """交卷流式：简答题逐题推送 grade 事件，done 返回完整 attempt 并落盘。"""
+    from app.routers import exams as exams_router
+    from app.services import exam_service as exam_service_mod
+
+    raw = json.dumps({"title": "简答卷", "questions": [
+        {"id": "q1", "type": "mcq", "question": "1+1=?", "options": ["1", "2", "3", "4"], "answer": "B", "explanation": ""},
+        {"id": "q2", "type": "short", "question": "什么是特征值?", "reference_answer": "伸缩倍数", "explanation": ""},
+        {"id": "q3", "type": "short", "question": "什么是特征向量?", "reference_answer": "方向", "explanation": ""},
+    ]}, ensure_ascii=False)
+
+    async def fake_gen(provider_id, messages, model="", temperature=None):
+        yield raw
+
+    monkeypatch.setattr(exams_router, "stream_llm", fake_gen)
+    _seed_note(client, "高数/数.md", "内容")
+    r = client.post("/api/exams/generate/stream", json={"paths": ["高数/数.md"], "types": ["mcq", "short"], "count": 3})
+    exam_id = _sse_events(r.text)[-1]["exam_id"]
+
+    async def fake_complete(provider_id, messages, model="", temperature=None):
+        if "特征向量" in messages[-1]["content"]:
+            return json.dumps({"score": 60, "feedback": "一般"}, ensure_ascii=False)
+        return json.dumps({"score": 80, "feedback": "不错"}, ensure_ascii=False)
+
+    monkeypatch.setattr(exam_service_mod, "complete", fake_complete)
+
+    r = client.post(f"/api/exams/{exam_id}/attempts/stream", json={"answers": [
+        {"question_id": "q1", "answer": "B"},
+        {"question_id": "q2", "answer": "特征值是伸缩倍数"},
+        {"question_id": "q3", "answer": "方向"},
+    ]})
+    assert "text/event-stream" in r.headers["content-type"]
+    events = _sse_events(r.text)
+    grade_events = [e for e in events if e["type"] == "grade"]
+    assert {e["question_id"] for e in grade_events} == {"q2", "q3"}
+    scores = {e["question_id"]: e["score"] for e in grade_events}
+    assert scores == {"q2": 80, "q3": 60}
+
+    done = events[-1]
+    assert done["type"] == "done"
+    attempt = done["attempt"]
+    assert attempt["total_score"] == round((100 + 80 + 60) / 3)
+    q2 = next(a for a in attempt["answers"] if a["question_id"] == "q2")
+    assert q2["score"] == 80 and q2["feedback"] == "不错"
+    # attempts 已落盘
+    attempts = client.get(f"/api/exams/{exam_id}/attempts").json()["attempts"]
+    assert len(attempts) == 1 and attempts[0]["id"] == attempt["id"]
+
+
+def test_topic_architecture_stream(client, data_dir, monkeypatch):
+    """主题整体架构：prompt 带内容盘点，流式生成后落盘为主题下笔记。"""
+    from app.routers import llm as llm_router
+
+    seen_prompts = []
+
+    async def fake_stream(provider_id, messages, model="", temperature=None):
+        seen_prompts.append(messages[-1]["content"])
+        for chunk in ("## 现有内容盘点\n", "已有矩阵运算相关笔记。"):
+            yield chunk
+
+    monkeypatch.setattr(llm_router, "stream_llm", fake_stream)
+    _seed_note(client, "机器学习/矩阵.md", "# 矩阵\n## 基础运算\n内容")
+
+    r = client.post("/api/llm/topic-architecture/stream", json={"topic": "机器学习"})
+    assert r.status_code == 200
+    events = _sse_events(r.text)
+    assert events[-1]["type"] == "done"
+    path = events[-1]["saved_path"]
+    assert path == "机器学习/_架构/整体架构.md"
+    # prompt 里带上了主题的结构盘点（笔记标题 + 小节）
+    assert "机器学习" in seen_prompts[0] and "矩阵" in seen_prompts[0]
+    # 落盘为可读笔记
+    note = client.get("/api/notes", params={"path": path}).json()
+    assert "已有矩阵运算相关笔记" in note["content"]
+    assert note["frontmatter"].get("generated") is True

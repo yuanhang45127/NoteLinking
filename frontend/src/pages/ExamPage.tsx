@@ -437,19 +437,36 @@ function QuizRunner({ exam, label, onClose, toast }: { exam: Exam; label: string
   const [showAnalysis, setShowAnalysis] = useState<Record<string, boolean>>({})
   const [result, setResult] = useState<Attempt | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // 流式评卷：简答题完成一题显示一题
+  const [grading, setGrading] = useState<{ total: number; rows: Record<string, { score?: number | null; feedback?: string }> } | null>(null)
 
   if (!questions.length) return null
   const q = questions[idx]
   const isLast = idx === questions.length - 1
   const answeredCount = questions.filter((x) => answers[x.id] !== undefined && answers[x.id] !== '').length
 
-  const submit = async () => {
+  const submit = () => {
     setSubmitting(true)
-    try {
-      const attempt = await api.submitAttempt(exam.id, questions.map((x) => ({ question_id: x.id, answer: answers[x.id] || '' }))) as Attempt
-      setResult(attempt)
-    } catch (e: any) { toast(e.message, 'err') }
-    setSubmitting(false)
+    const shortQs = questions.filter((x) => x.type === 'short')
+    setGrading({ total: shortQs.length, rows: {} })
+    streamSSE(streamUrls.attempt(exam.id), {
+      answers: questions.map((x) => ({ question_id: x.id, answer: answers[x.id] || '' })),
+    },
+      () => { /* 评卷事件走 onEvent */ },
+      (evt) => {
+        setGrading(null); setSubmitting(false)
+        if (evt?.attempt) setResult(evt.attempt as Attempt)
+        else toast('评卷失败，请重试', 'err')
+      },
+      (msg) => { setGrading(null); setSubmitting(false); toast(msg, 'err') },
+      (evt) => {
+        if (evt?.type === 'grade') {
+          setGrading((g) => (g ? {
+            total: g.total,
+            rows: { ...g.rows, [evt.question_id]: { score: evt.score, feedback: evt.feedback } },
+          } : g))
+        }
+      })
   }
 
   if (result) {
@@ -521,6 +538,25 @@ function QuizRunner({ exam, label, onClose, toast }: { exam: Exam; label: string
         </div>
       )}
 
+      {grading && (
+        <div className="quiz-analysis" style={{ marginTop: 12 }}>
+          <b>AI 评卷中…</b>
+          <span style={{ marginLeft: 8, color: 'var(--muted)' }}>
+            {Object.keys(grading.rows).length}/{grading.total} 已完成
+          </span>
+          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {questions.filter((x) => x.type === 'short').map((x) => {
+              const g = grading.rows[x.id]
+              return (
+                <div key={x.id} style={{ fontSize: 13, color: g ? 'var(--text)' : 'var(--muted)' }}>
+                  {g ? `✅ ${(x.question || '').slice(0, 24)}… → ${g.score ?? '?'} 分` : `⏳ ${(x.question || '').slice(0, 24)}…`}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="quiz-nav">
         <button className="btn text" disabled={idx === 0} onClick={() => setIdx((i) => i - 1)}>← 上一题</button>
         <button className="btn text" onClick={() => setShowAnalysis((s) => ({ ...s, [q.id]: !s[q.id] }))}>
@@ -528,7 +564,7 @@ function QuizRunner({ exam, label, onClose, toast }: { exam: Exam; label: string
         </button>
         {isLast ? (
           <button className="btn primary" disabled={submitting} onClick={submit}>
-            {submitting ? '判分中...' : `交卷（已答 ${answeredCount}/${questions.length}）`}
+            {submitting ? (grading ? '评卷中…' : '提交中…') : `交卷（已答 ${answeredCount}/${questions.length}）`}
           </button>
         ) : (
           <button className="btn primary" onClick={() => setIdx((i) => i + 1)}>下一题 →</button>

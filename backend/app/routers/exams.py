@@ -1,7 +1,7 @@
 """考试备考路由：出题、试卷管理、作答判分、考点清单、备考目标、学习指南。"""
 from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ..schemas import AttemptRequest, ExamGenerateRequest
 from ..services import exam_service, goals_store
@@ -96,6 +96,25 @@ async def submit_attempt(exam_id: str, body: AttemptRequest):
     return await exam_service.submit_attempt(
         exam_id, body.answers, body.provider or "", body.model or ""
     )
+
+
+@router.post("/exams/{exam_id}/attempts/stream")
+async def stream_submit_attempt(exam_id: str, body: AttemptRequest):
+    """交卷流式：选择题即时判分；简答题并发评阅，完成一题推送一题
+    （type=grade 事件），全部完成后 done 事件返回完整 attempt。"""
+    plan = exam_service.prepare_attempt(exam_id, body.answers)
+
+    async def gen():
+        grades: Dict[str, Dict] = {}
+        async for qid, grade in exam_service.grade_short_stream(
+            plan["questions"], plan["ans_map"], plan["language"]
+        ):
+            grades[qid] = grade
+            yield {"type": "grade", "question_id": qid, **grade}
+        attempt = exam_service.finalize_attempt(plan, grades)
+        yield {"type": "done", "attempt": attempt}
+
+    return sse_response(gen())
 
 
 @router.get("/exams/{exam_id}/attempts")

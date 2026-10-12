@@ -134,6 +134,14 @@ class AttemptRequest(BaseModel):
     model: Optional[str] = None
 
 
+class TopicArchitectureRequest(BaseModel):
+    topic: str
+    goal: str = ""
+    save_path: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
 class StudyGuideRequest(BaseModel):
     paths: List[str]
     language: str = "zh"

@@ -13,7 +13,10 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from ..markdown_utils import append_section, ensure_frontmatter
-from ..schemas import AskRequest, ChatRequest, GenerateNoteRequest, StudyGuideRequest, TutorChatRequest
+from ..schemas import (
+    AskRequest, ChatRequest, GenerateNoteRequest, StudyGuideRequest,
+    TopicArchitectureRequest, TutorChatRequest,
+)
 from ..services import vault
 from ..services.llm_service import LLMError, complete, stream_llm
 
@@ -228,6 +231,31 @@ async def study_guide(body: StudyGuideRequest):
         saved = vault.create_note(body.save_path, md, overwrite=False)
         result["saved_path"] = saved["path"]
     return result
+
+
+@router.post("/topic-architecture/stream")
+async def topic_architecture_stream(body: TopicArchitectureRequest):
+    """主题整体架构：盘点主题内容 → 流式生成学习架构文档 → 落盘为主题下笔记。"""
+    import datetime
+
+    from ..services import arch_service, vault
+
+    overview = arch_service.topic_overview(body.topic)
+    messages = arch_service.arch_messages(overview, body.goal or "")
+    title = f"{body.topic} · 整体架构"
+    save_path = body.save_path or f"{body.topic}/_架构/整体架构.md"
+
+    async def gen():
+        buf = []
+        async for delta in stream_llm(body.provider or "", messages, body.model or ""):
+            buf.append(delta)
+            yield {"type": "delta", "text": delta}
+        fm = {"title": title, "generated": True, "created": datetime.date.today().isoformat()}
+        content = ensure_frontmatter(f"# {title}\n", fm) + "".join(buf).strip() + "\n"
+        saved = vault.create_note(save_path, content, overwrite=True)
+        yield {"type": "done", "saved_path": saved["path"]}
+
+    return sse_response(gen())
 
 
 @router.post("/study-guide/stream")

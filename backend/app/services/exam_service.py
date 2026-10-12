@@ -2,6 +2,7 @@
 判分（选择题自动判、简答题大模型评阅）、生成学习指南。
 参考 NotebookLM 的「学习指南 / 测验」能力。
 """
+import asyncio
 import datetime
 import json
 import re
@@ -227,15 +228,47 @@ async def _grade_short_questions(questions: List[Dict], answers: Dict[str, str],
         return {}
 
 
-async def submit_attempt(exam_id: str, answers: List[Dict], provider_id: str = "", model: str = "") -> Dict:
-    """answers: [{question_id, answer}]；选择题自动判分，简答题交给大模型评阅。"""
+async def grade_short_stream(questions: List[Dict], answers: Dict[str, str], language: str):
+    """逐题评阅简答题（并发），完成一题 yield 一题：(question_id, {score, feedback})。"""
+    short_qs = [q for q in questions if q.get("type") == "short" and str(q.get("id")) in answers]
+    if not short_qs:
+        return
+    lang = "中文" if language == "zh" else language
+    system = "你是阅卷老师。按参考答案给学生的简答打分，只输出 JSON，不要其他文字。"
+
+    async def one(qid: str, q: Dict, student: str):
+        try:
+            user = (
+                f"题目与作答如下（{lang}）：\n"
+                f"{json.dumps({'question': q.get('question', ''), 'reference_answer': q.get('reference_answer', ''), 'student_answer': student}, ensure_ascii=False)}\n\n"
+                '请输出：{"score": 0到100的整数, "feedback": "一句话点评"}'
+            )
+            raw = await complete("", [{"role": "system", "content": system}, {"role": "user", "content": user}])
+            data = extract_json(raw)
+            return qid, {"score": int(data.get("score", 0)), "feedback": str(data.get("feedback", ""))}
+        except (HTTPException, KeyError, TypeError, ValueError):
+            return qid, {}
+
+    for coro in asyncio.as_completed(
+        [one(str(q["id"]), q, answers[str(q["id"])]) for q in short_qs]
+    ):
+        yield await coro
+
+
+def prepare_attempt(exam_id: str, answers: List[Dict]) -> Dict:
+    """读取试卷并整理作答，返回评卷所需的计划（流式/非流式共用）。"""
     data = json.loads(_exam_file(exam_id).read_text(encoding="utf-8"))
     questions = data.get("questions", [])
-    qmap = {str(q["id"]): q for q in questions}
     ans_map = {str(a.get("question_id")): a.get("answer", "") for a in answers}
     language = (data.get("settings") or {}).get("language", "zh")
+    return {"exam_id": exam_id, "data": data, "questions": questions, "ans_map": ans_map, "language": language}
 
-    short_grades = await _grade_short_questions(questions, ans_map, language)
+
+def finalize_attempt(plan: Dict, short_grades: Dict[str, Dict]) -> Dict:
+    """按评阅结果合成逐题结果并落盘，返回 attempt。"""
+    data = plan["data"]
+    questions = plan["questions"]
+    ans_map = plan["ans_map"]
 
     per_question, scores = [], []
     for q in questions:
@@ -272,8 +305,15 @@ async def submit_attempt(exam_id: str, answers: List[Dict], provider_id: str = "
         "graded_count": len(scores),
     }
     data.setdefault("attempts", []).append(attempt)
-    _exam_file(exam_id).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _exam_file(plan["exam_id"]).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return attempt
+
+
+async def submit_attempt(exam_id: str, answers: List[Dict], provider_id: str = "", model: str = "") -> Dict:
+    """answers: [{question_id, answer}]；选择题自动判分，简答题交给大模型评阅。"""
+    plan = prepare_attempt(exam_id, answers)
+    short_grades = await _grade_short_questions(plan["questions"], plan["ans_map"], plan["language"])
+    return finalize_attempt(plan, short_grades)
 
 
 def list_attempts(exam_id: str) -> List[Dict]:

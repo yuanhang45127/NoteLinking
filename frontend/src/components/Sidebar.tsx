@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { api } from '../api'
+import { api, getModelOverride, streamSSE, streamUrls } from '../api'
 import { useApp } from '../store'
 import {
   IconCaretDown, IconCheck, IconChevron, IconConcept, IconDoc, IconFolder,
@@ -25,6 +25,7 @@ export default function Sidebar() {
   const [newTopic, setNewTopic] = useState('')
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [custom, setCustom] = useState('')
+  const [archOpen, setArchOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -105,6 +106,10 @@ export default function Sidebar() {
               <span style={{ width: 15 }} />
               {currentEmoji ? '更换图标' : '选择图标'} 🎨
             </button>
+            <button disabled={!activeTopic} onClick={() => { setMenuOpen(false); setArchOpen(true) }}>
+              <span style={{ width: 15 }} />
+              生成整体架构 ✦
+            </button>
           </div>
         )}
       </div>
@@ -132,6 +137,10 @@ export default function Sidebar() {
           </div>
         )}
       </div>
+
+      {archOpen && activeTopic && (
+        <ArchitectureModal topic={activeTopic} onClose={() => setArchOpen(false)} />
+      )}
 
       {emojiOpen && (
         <Modal title={`「${activeTopic}」的图标`} onClose={() => setEmojiOpen(false)}
@@ -215,5 +224,54 @@ function TreeLeaf({ node, currentPath }: { node: TreeNode; currentPath: string }
       <span className="name">{node.name}{!isTerm && <span className="ext">.md</span>}</span>
       {isTerm && <span className="kind-tag">概念</span>}
     </button>
+  )
+}
+
+/* ---------------- 主题整体架构（流式生成） ---------------- */
+function ArchitectureModal({ topic, onClose }: { topic: string; onClose: () => void }) {
+  const [text, setText] = useState('')
+  const [savedPath, setSavedPath] = useState('')
+  const [err, setErr] = useState('')
+  const ctrlRef = useRef<{ abort: () => void } | null>(null)
+  const navigate = useNavigate()
+  const { refreshTree } = useApp()
+
+  useEffect(() => {
+    ctrlRef.current = streamSSE(streamUrls.topicArchitecture, {
+      topic, stream: true, ...getModelOverride(),
+    },
+      (t) => setText((s) => s + t),
+      (evt) => {
+        if (evt?.saved_path) {
+          setSavedPath(evt.saved_path)
+          refreshTree()
+          navigate(`/notes?path=${encodeURIComponent(evt.saved_path)}`)
+        } else {
+          setErr('生成完成但保存失败，请重试')
+        }
+      },
+      (msg) => setErr(msg))
+    return () => ctrlRef.current?.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topic])
+
+  return (
+    <Modal title={`生成整体架构 · ${topic}`} onClose={() => { ctrlRef.current?.abort(); onClose() }} wide
+      ops={
+        <>
+          {!err && <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--muted)' }}>
+            {savedPath ? '已保存 ✓ 正在打开…' : '流式生成中…'}
+          </span>}
+          <button className="btn" onClick={() => { ctrlRef.current?.abort(); onClose() }}>
+            {savedPath ? '关闭' : '取消'}
+          </button>
+        </>
+      }>
+      {err && <div style={{ color: 'var(--err)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
+      {savedPath && <div style={{ color: 'var(--ok)', fontSize: 13, marginBottom: 8 }}>已保存为笔记：{savedPath}</div>}
+      <div className={`stream-box ${!text && !err ? 'loading-dot' : ''}`} style={{ maxHeight: 460, overflow: 'auto' }}>
+        {text || ' '}
+      </div>
+    </Modal>
   )
 }

@@ -156,12 +156,14 @@ export function setModelOverride(provider: string, model: string) {
   else localStorage.removeItem('nl-model')
 }
 
-/** POST 并解析 SSE 流：onDelta 收增量文本，onDone 收结束事件。返回可中断控制器。 */export function streamSSE(
+/** POST 并解析 SSE 流：onDelta 收增量文本，onDone 收结束事件，onEvent 收全部原始事件。
+ * 返回可中断控制器。 */export function streamSSE(
   url: string,
   body: unknown,
   onDelta: (text: string) => void,
   onDone?: (evt: any) => void,
   onError?: (msg: string) => void,
+  onEvent?: (evt: any) => void,
 ): { abort: () => void } {
   const ctrl = new AbortController()
   ;(async () => {
@@ -199,6 +201,7 @@ export function setModelOverride(provider: string, model: string) {
             if (evt.type === 'delta') onDelta(evt.text)
             else if (evt.type === 'done') onDone?.(evt)
             else if (evt.type === 'error') onError?.(evt.message || '生成失败')
+            onEvent?.(evt)
           } catch { /* 跳过不完整块 */ }
         }
       }
@@ -220,6 +223,8 @@ export const llmUrls = {
 export const streamUrls = {
   term: '/api/terms/stream',
   examGenerate: '/api/exams/generate/stream',
+  attempt: (examId: string) => `/api/exams/${encodeURIComponent(examId)}/attempts/stream`,
   checklist: '/api/exams/checklist/stream',
   studyGuide: '/api/llm/study-guide/stream',
+  topicArchitecture: '/api/llm/topic-architecture/stream',
 }
