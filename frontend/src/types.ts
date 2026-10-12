@@ -173,3 +173,65 @@ export interface ChatMsg {
   quizExamId?: string
   quizSummary?: string
 }
+
+export type PaperStatus = 'unread' | 'reading' | 'done'
+
+export interface Paper {
+  id: string
+  topic: string
+  title: string
+  authors: string[]
+  year: string
+  venue: string
+  abstract: string
+  doi: string
+  arxiv_id: string
+  url: string
+  pdf: string
+  tags: string[]
+  status: PaperStatus
+  comment: string
+  added_at: string
+  pdf_path?: string
+  pdf_downloaded_at?: string
+}
+
+export interface ZoteroConfig {
+  user_id: string
+  api_key: string
+  collection: string
+  collection_name: string
+  base_url: string
+  download_pdf: boolean
+  has_key?: boolean
+}
+
+export interface ZoteroCollection {
+  key: string
+  name: string
+  num_items: number
+}
+
+export interface ZoteroSyncResult {
+  topic: string
+  fetched: number
+  added: number
+  skipped: number
+  pdf_downloaded: number
+  pdf_failed: number
+  last_version: number
+  synced_at: string
+}
+
+export interface ArxivResult {
+  title: string
+  authors: string[]
+  year: string
+  venue: string
+  abstract: string
+  arxiv_id: string
+  url: string
+  pdf: string
+  published: string
+  categories: string[]
+}

@@ -142,6 +142,13 @@ class TopicArchitectureRequest(BaseModel):
     model: Optional[str] = None
 
 
+class TopicScaffoldRequest(BaseModel):
+    topic: str
+    save_path: str = ""
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
 class StudyGuideRequest(BaseModel):
     paths: List[str]
     language: str = "zh"

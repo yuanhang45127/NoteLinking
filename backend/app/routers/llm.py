@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from ..markdown_utils import append_section, ensure_frontmatter
 from ..schemas import (
     AskRequest, ChatRequest, GenerateNoteRequest, StudyGuideRequest,
-    TopicArchitectureRequest, TutorChatRequest,
+    TopicArchitectureRequest, TopicScaffoldRequest, TutorChatRequest,
 )
 from ..services import vault
 from ..services.llm_service import LLMError, complete, stream_llm
@@ -254,6 +254,65 @@ async def topic_architecture_stream(body: TopicArchitectureRequest):
         content = ensure_frontmatter(f"# {title}\n", fm) + "".join(buf).strip() + "\n"
         saved = vault.create_note(save_path, content, overwrite=True)
         yield {"type": "done", "saved_path": saved["path"]}
+
+    return sse_response(gen())
+
+
+@router.post("/topic-architecture/scaffold")
+def topic_architecture_scaffold(body: TopicScaffoldRequest):
+    """按整体架构「建议知识架构」的最小等级生成主题目录骨架（已存在的目录跳过）。"""
+    from ..services import arch_service
+
+    return arch_service.scaffold_from_architecture(body.topic, body.save_path)
+
+
+@router.post("/topic-architecture/generate-notes/stream")
+async def topic_architecture_generate_notes(body: TopicScaffoldRequest):
+    """按整体架构提纲，从最小等级逐篇用大模型生成笔记（SSE 汇报进度）。
+
+    事件：start(total) → note_start/note_done/note_skip/note_error(index, title) → done(created, failed)。
+    单篇失败不中断整批；笔记已存在时跳过（旧版落盘在叶子上一层目录的直接移入文件夹，不重复生成）；
+    客户端断开即中止后续生成。
+    """
+    from ..services import arch_service
+
+    chains = arch_service.arch_leaf_chains(body.topic, body.save_path)
+    provider, model = body.provider or "", body.model or ""
+
+    async def gen():
+        total = len(chains)
+        yield {"type": "start", "total": total}
+        created = failed = 0
+        for i, chain in enumerate(chains):
+            title = chain[-1]
+            # 与目录骨架一致：链上每个节点都是文件夹，笔记落在叶子文件夹内
+            rel = f"{body.topic}/{'/'.join(chain)}/{title}.md"
+            yield {"type": "note_start", "index": i, "total": total, "title": title}
+            try:
+                try:
+                    vault.read_note(rel)
+                    yield {"type": "note_skip", "index": i, "title": title, "reason": "已存在，跳过"}
+                    continue
+                except HTTPException as e:
+                    if e.status_code != 404:
+                        raise
+                # 兼容旧版落盘位置（平铺在叶子上一层目录）：移入文件夹即可，不重复生成
+                legacy = f"{body.topic}/{'/'.join(chain)}.md"
+                try:
+                    vault.move_note(legacy, rel)
+                    yield {"type": "note_skip", "index": i, "title": title, "reason": "旧位置笔记已移入文件夹"}
+                    continue
+                except HTTPException:
+                    pass
+                messages = arch_service.leaf_note_messages(body.topic, chain)
+                text = await complete(provider, messages, model)
+                saved = _save_generated(title, text, rel, "zh")
+                created += 1
+                yield {"type": "note_done", "index": i, "title": title, "path": saved["path"]}
+            except Exception as e:  # noqa: BLE001 单篇失败不中断整批
+                failed += 1
+                yield {"type": "note_error", "index": i, "title": title, "message": str(e)}
+        yield {"type": "done", "created": created, "failed": failed}
 
     return sse_response(gen())
 

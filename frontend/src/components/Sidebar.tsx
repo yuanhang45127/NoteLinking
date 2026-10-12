@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api, getModelOverride, streamSSE, streamUrls } from '../api'
 import { useApp } from '../store'
 import {
-  IconCaretDown, IconCheck, IconChevron, IconConcept, IconDoc, IconFolder,
+  IconCaretDown, IconCheck, IconChevron, IconConcept, IconDoc, IconFilePdf, IconFolder,
   IconFolderOpen, IconGear, IconGraph, IconGrad, IconNote, IconPlus,
 } from './Icons'
 import Modal from './Modal'
@@ -34,6 +34,8 @@ export default function Sidebar() {
   const [moving, setMoving] = useState(false)
   // 单行 ⋮ 菜单
   const [rowMenu, setRowMenu] = useState<{ path: string; name: string; isTerm: boolean; x: number; y: number } | null>(null)
+  // 按架构批量生成笔记
+  const [genNotes, setGenNotes] = useState<{ topic: string; savePath: string } | null>(null)
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -63,6 +65,17 @@ export default function Sidebar() {
     return () => document.removeEventListener('mousedown', close)
   }, [rowMenu])
 
+  // 图标选择面板（锚定在主题按钮下方）：点面板外自动关闭
+  const emojiPopRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!emojiFor) return
+    const onDoc = (e: MouseEvent) => {
+      if (!emojiPopRef.current?.contains(e.target as Node)) setEmojiFor(null)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [emojiFor])
+
   const toggleCheck = (path: string) => {
     setChecked((s) => {
       const next = new Set(s)
@@ -79,7 +92,10 @@ export default function Sidebar() {
 
   const openRowMenu = (path: string, name: string, isTerm: boolean, e: React.MouseEvent) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    setRowMenu({ path, name, isTerm, x: Math.max(8, rect.right - 150), y: rect.bottom + 4 })
+    // 钳制在视口内：靠下的笔记菜单不溢出屏幕底部
+    const x = Math.min(Math.max(8, rect.right - 150), window.innerWidth - 148)
+    const y = Math.min(rect.bottom + 4, window.innerHeight - 100)
+    setRowMenu({ path, name, isTerm, x, y })
   }
 
   const renameNote = async (path: string, name: string) => {
@@ -132,6 +148,22 @@ export default function Sidebar() {
     } catch (e: any) { toast(e.message, 'err') }
   }
 
+  // 拖拽移动：把笔记拖到某个文件夹行上即移动进去
+  const dropNoteInto = async (src: string, dstDir: string) => {
+    const name = src.split('/').pop() || ''
+    if (!name.toLowerCase().endsWith('.md')) return
+    const dst = `${dstDir}/${name}`
+    if (dst === src || src.split('/').slice(0, -1).join('/') === dstDir) return
+    try {
+      await api.moveNote(src, dst)
+      toast(`已移动「${name.replace(/\.md$/i, '')}」到「${dstDir.split('/').pop()}」`)
+      await refreshTree(); refreshTopics()
+      if (currentPath === src) {
+        navigate(`${dst.startsWith(`${activeTopic}/terms/`) ? '/concept' : '/notes'}?path=${encodeURIComponent(dst)}`)
+      }
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
   const createTopic = async () => {
     const name = newTopic.trim()
     if (!name) return
@@ -141,6 +173,20 @@ export default function Sidebar() {
       await refreshTopics()
       setActiveTopic(name)
       toast(`已创建主题「${name}」`)
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  // 创建主题后紧接着用 AI 生成整体架构（架构生成的唯一入口在新建主题流程）
+  const createTopicWithArchitecture = async () => {
+    const name = newTopic.trim()
+    if (!name) return
+    try {
+      await api.createTopic(name)
+      setCreating(false); setNewTopic('')
+      await refreshTopics()
+      setActiveTopic(name)
+      setArchOpen(true)
+      toast(`已创建主题「${name}」，正在生成整体架构…`)
     } catch (e: any) { toast(e.message, 'err') }
   }
 
@@ -172,6 +218,9 @@ export default function Sidebar() {
       <button className={`nav-item ${location.pathname.startsWith('/graph') ? 'active' : ''}`} onClick={() => navigate('/graph')}>
         <IconGraph /> 知识图谱
       </button>
+      <button className={`nav-item ${location.pathname.startsWith('/papers') ? 'active' : ''}`} onClick={() => navigate('/papers')}>
+        <IconFilePdf /> 文献库
+      </button>
       <button className={`nav-item ${location.pathname.startsWith('/exam') ? 'active' : ''}`} onClick={() => navigate('/exam')}>
         <IconGrad /> 考试备考
       </button>
@@ -191,13 +240,16 @@ export default function Sidebar() {
         )}
       </div>
       <div className="topic-select">
-        <button className={`topic-btn ${menuOpen ? 'open' : ''}`} onClick={() => setMenuOpen((v) => !v)}>
-          {currentEmoji
-            ? <span className="topic-emoji emoji-editable" title="点击更换图标"
-                onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setCustom(''); setEmojiFor(activeTopic) }}>
-                {currentEmoji}
-              </span>
-            : <IconDoc size={17} />}
+        <button className={`topic-btn ${menuOpen ? 'open' : ''}`}
+          onClick={() => { setEmojiFor(null); setMenuOpen((v) => !v) }}>
+          {activeTopic ? (
+            <span className={`topic-emoji emoji-editable ${currentEmoji ? '' : 'emoji-empty'}`} title="点击更换图标"
+              onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setCustom(''); setEmojiFor(activeTopic) }}>
+              {currentEmoji || '🎨'}
+            </span>
+          ) : (
+            <IconDoc size={17} />
+          )}
           <span>{activeTopic || '选择主题'}</span>
           <span className="caret"><IconCaretDown size={15} /></span>
         </button>
@@ -207,25 +259,35 @@ export default function Sidebar() {
               <button key={t.path} className={t.name === activeTopic ? 'sel' : ''}
                 onClick={() => { setActiveTopic(t.name); setMenuOpen(false) }}>
                 {t.name === activeTopic ? <IconCheck size={15} /> : <span style={{ width: 15 }} />}
-                <span className={`topic-emoji emoji-editable ${t.emoji ? '' : 'emoji-empty'}`}
-                  title={t.emoji ? '点击更换此主题图标' : '点击设置图标'}
-                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setCustom(''); setEmojiFor(t.name) }}>
-                  {t.emoji || '🎨'}
-                </span>
+                {t.emoji && <span className="topic-emoji">{t.emoji}</span>}
                 {t.name}
                 <span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 12 }}>{t.note_count}</span>
               </button>
             ))}
             {!topics.length && <div className="empty">还没有主题，先新建一个</div>}
-            <hr style={{ border: 0, borderTop: '1px solid var(--border)', margin: '6px 4px' }} />
-            <button disabled={!activeTopic} onClick={() => { setEmojiFor(activeTopic); setMenuOpen(false); setCustom('') }}>
-              <span style={{ width: 15 }} />
-              {currentEmoji ? '更换图标' : '选择图标'} 🎨
-            </button>
-            <button disabled={!activeTopic} onClick={() => { setMenuOpen(false); setArchOpen(true) }}>
-              <span style={{ width: 15 }} />
-              生成整体架构 ✦
-            </button>
+          </div>
+        )}
+
+        {/* 主题图标就地选择面板：点主题按钮上的图标直接弹出 */}
+        {emojiFor && (
+          <div className="emoji-pop" ref={emojiPopRef}>
+            <div className="emoji-pop-title">「{emojiFor}」的图标</div>
+            <div className="emoji-grid">
+              {EMOJI_CHOICES.map((e) => (
+                <button key={e} className={`emoji-cell ${emojiCurrent === e ? 'sel' : ''}`}
+                  onClick={() => pickEmoji(e)}>{e}</button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <input className="text-input" style={{ flex: 1, minWidth: 0 }} placeholder="自定义 emoji"
+                value={custom} maxLength={8} onChange={(e) => setCustom(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && custom.trim() && pickEmoji(custom.trim())} />
+              <button className="btn primary small" disabled={!custom.trim()}
+                onClick={() => pickEmoji(custom.trim())}>使用</button>
+            </div>
+            {emojiCurrent && (
+              <button className="btn text" style={{ marginTop: 6 }} onClick={() => pickEmoji('')}>清除图标</button>
+            )}
           </div>
         )}
       </div>
@@ -241,6 +303,7 @@ export default function Sidebar() {
             checked={checked}
             onCheck={toggleCheck}
             onMenu={openRowMenu}
+            onDropNote={selectMode ? undefined : dropNoteInto}
           />
         )}
         {!activeTopic && <div className="side-hint">创建主题后，这里会显示对应主题的文件目录。</div>}
@@ -293,49 +356,35 @@ export default function Sidebar() {
             <input className="text-input" style={{ flex: 1, minWidth: 0 }} autoFocus placeholder="主题名称"
               value={newTopic} onChange={(e) => setNewTopic(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && createTopic()} />
-            <button className="btn primary small" onClick={createTopic}>确定</button>
+            <button className="btn primary small" onClick={createTopic}>创建</button>
+            <button className="btn small" title="创建主题并用 AI 生成整体架构笔记"
+              disabled={!newTopic.trim()} onClick={createTopicWithArchitecture}>✦ 架构</button>
           </div>
         )}
       </div>
 
       {archOpen && activeTopic && (
-        <ArchitectureModal topic={activeTopic} onClose={() => setArchOpen(false)} />
+        <ArchitectureModal topic={activeTopic} onClose={() => setArchOpen(false)}
+          onGenerateNotes={(sp) => { setArchOpen(false); setGenNotes({ topic: activeTopic, savePath: sp }) }} />
+      )}
+
+      {genNotes && (
+        <GenerateNotesModal topic={genNotes.topic} savePath={genNotes.savePath} onClose={() => setGenNotes(null)} />
       )}
 
       {rowMenu && (
         <div className="row-menu-pop" style={{ left: rowMenu.x, top: rowMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}>
           <button onClick={() => renameNote(rowMenu.path, rowMenu.name)}>✏️ 重命名</button>
           <button className="danger" onClick={() => deleteNote(rowMenu.path, rowMenu.name)}>🗑 删除</button>
         </div>
       )}
-
-      {emojiFor && (
-        <Modal title={`「${emojiFor}」的图标`} onClose={() => setEmojiFor(null)}
-          ops={<button className="btn" onClick={() => setEmojiFor(null)}>关闭</button>}>
-          <div className="emoji-grid">
-            {EMOJI_CHOICES.map((e) => (
-              <button key={e} className={`emoji-cell ${emojiCurrent === e ? 'sel' : ''}`}
-                onClick={() => pickEmoji(e)}>{e}</button>
-            ))}
-          </div>
-          <div className="field-label">自定义（粘贴任意 emoji）</div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input className="text-input" style={{ flex: 1 }} placeholder="如 🧫"
-              value={custom} maxLength={8} onChange={(e) => setCustom(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && custom.trim() && pickEmoji(custom.trim())} />
-            <button className="btn primary" disabled={!custom.trim()} onClick={() => pickEmoji(custom.trim())}>使用</button>
-          </div>
-          {emojiCurrent && (
-            <button className="btn text" style={{ marginTop: 12 }} onClick={() => pickEmoji('')}>清除当前图标</button>
-          )}
-        </Modal>
-      )}
     </aside>
   )
 }
 
-function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCheck, onMenu }: {
+function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCheck, onMenu, onDropNote }: {
   node: TreeNode | null
   topic: string
   currentPath: string
@@ -344,7 +393,9 @@ function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCh
   checked: Set<string>
   onCheck: (path: string) => void
   onMenu: (path: string, name: string, isTerm: boolean, e: React.MouseEvent) => void
+  onDropNote?: (src: string, dstDir: string) => void
 }) {
+  const [dropping, setDropping] = useState(false)
   const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => {
     try { return JSON.parse(localStorage.getItem('nl-tree-open') || '{}') } catch { return {} }
   })
@@ -359,10 +410,11 @@ function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCh
     children.map((child) =>
       child.type === 'dir' ? (
         <TreeFolder key={child.path} node={child} topic={topic} currentPath={currentPath} depth={depth + 1}
-          selectMode={selectMode} checked={checked} onCheck={onCheck} onMenu={onMenu} />
+          selectMode={selectMode} checked={checked} onCheck={onCheck} onMenu={onMenu} onDropNote={onDropNote} />
       ) : (
         <TreeLeaf key={child.path} node={child} currentPath={currentPath}
-          selectMode={selectMode} checked={checked.has(child.path)} onCheck={onCheck} onMenu={onMenu} />
+          selectMode={selectMode} checked={checked.has(child.path)} onCheck={onCheck} onMenu={onMenu}
+          canDrag={!!onDropNote} />
       ),
     )
 
@@ -374,7 +426,21 @@ function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCh
   const open = openMap[node.path] ?? true
   return (
     <div className="tree-folder">
-      <button className="tree-row" onClick={() => toggle(node.path)}>
+      <button className={`tree-row ${dropping ? 'drop-hint' : ''}`} onClick={() => toggle(node.path)}
+        onDragOver={(e) => {
+          if (!onDropNote) return
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'move'
+          setDropping(true)
+        }}
+        onDragLeave={() => setDropping(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDropping(false)
+          if (!onDropNote) return
+          const src = e.dataTransfer.getData('text/nl-note') || e.dataTransfer.getData('text/plain')
+          if (src) onDropNote(src, node.path)
+        }}>
         <span className={`chev ${open ? 'open' : ''}`}><IconChevron size={13} /></span>
         {open ? <IconFolderOpen size={16} /> : <IconFolder size={16} />}
         <span className="name">{node.name}</span>
@@ -384,13 +450,14 @@ function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCh
   )
 }
 
-function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu }: {
+function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu, canDrag }: {
   node: TreeNode
   currentPath: string
   selectMode: boolean
   checked: boolean
   onCheck: (path: string) => void
   onMenu: (path: string, name: string, isTerm: boolean, e: React.MouseEvent) => void
+  canDrag?: boolean
 }) {
   const navigate = useNavigate()
   const isTerm = node.type === 'term'
@@ -417,7 +484,14 @@ function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu }: {
   }
 
   return (
-    <div className={`tree-row-wrap ${active ? 'active' : ''}`}>
+    <div className={`tree-row-wrap ${active ? 'active' : ''}`}
+      draggable={!!canDrag}
+      onDragStart={(e) => {
+        if (!canDrag) return
+        e.dataTransfer.setData('text/nl-note', node.path)
+        e.dataTransfer.setData('text/plain', node.path)
+        e.dataTransfer.effectAllowed = 'move'
+      }}>
       <button className="tree-row" onClick={open} title={node.path}>
         {isTerm
           ? <span className="icon-concept"><IconConcept size={15} /></span>
@@ -434,13 +508,28 @@ function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu }: {
 }
 
 /* ---------------- 主题整体架构（流式生成） ---------------- */
-function ArchitectureModal({ topic, onClose }: { topic: string; onClose: () => void }) {
+function ArchitectureModal({ topic, onClose, onGenerateNotes }: {
+  topic: string
+  onClose: () => void
+  onGenerateNotes?: (savePath: string) => void
+}) {
   const [text, setText] = useState('')
   const [savedPath, setSavedPath] = useState('')
   const [err, setErr] = useState('')
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
   const navigate = useNavigate()
-  const { refreshTree } = useApp()
+  const { refreshTree, toast } = useApp()
+
+  // 按「建议知识架构」最小等级创建主题目录骨架（已存在目录跳过）
+  const scaffoldDirs = async () => {
+    try {
+      const res = await api.scaffoldTopic(topic, savedPath)
+      const n = (res.created || []).length
+      const s = (res.skipped || []).length
+      toast(n ? `已按架构生成 ${n} 个目录${s ? `，跳过已存在 ${s} 个` : ''}` : '没有需要新建的目录，均已存在')
+      refreshTree()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
 
   useEffect(() => {
     ctrlRef.current = streamSSE(streamUrls.topicArchitecture, {
@@ -468,6 +557,11 @@ function ArchitectureModal({ topic, onClose }: { topic: string; onClose: () => v
           {!err && <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--muted)' }}>
             {savedPath ? '已保存 ✓ 正在打开…' : '流式生成中…'}
           </span>}
+          <button className="btn" disabled={!savedPath} title="按「建议知识架构」的最小等级创建目录"
+            onClick={scaffoldDirs}>按架构生成目录</button>
+          <button className="btn" disabled={!savedPath} title="按提纲从最小等级逐篇用 AI 生成全部笔记"
+            onClick={() => { const sp = savedPath; ctrlRef.current?.abort(); onClose(); onGenerateNotes?.(sp) }}>
+            生成全部笔记</button>
           <button className="btn" onClick={() => { ctrlRef.current?.abort(); onClose() }}>
             {savedPath ? '关闭' : '取消'}
           </button>
@@ -477,6 +571,89 @@ function ArchitectureModal({ topic, onClose }: { topic: string; onClose: () => v
       {savedPath && <div style={{ color: 'var(--ok)', fontSize: 13, marginBottom: 8 }}>已保存为笔记：{savedPath}</div>}
       <div className={`stream-box ${!text && !err ? 'loading-dot' : ''}`} style={{ maxHeight: 460, overflow: 'auto' }}>
         <StreamMd text={text} streaming={!savedPath && !err} />
+      </div>
+    </Modal>
+  )
+}
+
+/* ---------------- 按架构批量生成笔记（进度） ---------------- */
+type GenItem = { title: string; status: 'pending' | 'running' | 'done' | 'skip' | 'error'; msg?: string }
+
+function GenerateNotesModal({ topic, savePath, onClose }: {
+  topic: string
+  savePath: string
+  onClose: () => void
+}) {
+  const [items, setItems] = useState<GenItem[]>([])
+  const [finished, setFinished] = useState(false)
+  const [err, setErr] = useState('')
+  const ctrlRef = useRef<{ abort: () => void } | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const { refreshTree, toast } = useApp()
+
+  useEffect(() => {
+    ctrlRef.current = streamSSE(
+      streamUrls.topicGenerateNotes,
+      { topic, save_path: savePath, ...getModelOverride() },
+      () => {}, // 批量模式不流式展示单篇正文，只看进度
+      (evt) => {
+        setFinished(true)
+        refreshTree()
+        toast(`笔记生成完成：成功 ${evt.created ?? 0} 篇${evt.failed ? `，失败 ${evt.failed} 篇` : ''}`)
+      },
+      (msg) => { setErr(msg); toast(msg, 'err') },
+      (evt) => {
+        if (evt.type === 'start') {
+          setItems(Array.from({ length: evt.total }, () => ({ title: '', status: 'pending' as const })))
+        } else if (evt.type === 'note_start') {
+          setItems((s) => s.map((it, i) => (i === evt.index ? { title: evt.title, status: 'running' } : it)))
+        } else if (evt.type === 'note_done') {
+          setItems((s) => s.map((it, i) => (i === evt.index ? { ...it, status: 'done' } : it)))
+        } else if (evt.type === 'note_skip') {
+          setItems((s) => s.map((it, i) => (i === evt.index ? { ...it, status: 'skip', msg: evt.reason } : it)))
+        } else if (evt.type === 'note_error') {
+          setItems((s) => s.map((it, i) => (i === evt.index ? { ...it, status: 'error', msg: evt.message } : it)))
+        }
+      },
+    )
+    return () => ctrlRef.current?.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
+  }, [items])
+
+  const doneCount = items.filter((i) => i.status === 'done' || i.status === 'skip' || i.status === 'error').length
+  const icon: Record<GenItem['status'], string> = { pending: '·', running: '⏳', done: '✅', skip: '⏭', error: '❌' }
+
+  return (
+    <Modal title={`按架构生成全部笔记 · ${topic}`} onClose={() => { ctrlRef.current?.abort(); onClose() }} wide
+      ops={
+        <>
+          <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--muted)' }}>
+            {err ? '已停止' : finished ? `全部完成（${items.length} 篇）` : `生成中 ${doneCount} / ${items.length || '…'}`}
+          </span>
+          <button className="btn" onClick={() => { ctrlRef.current?.abort(); onClose() }}>
+            {finished ? '关闭' : '中止'}
+          </button>
+        </>
+      }>
+      <div className="stream-box" ref={listRef} style={{ maxHeight: 400 }}>
+        {err && <div style={{ color: 'var(--err)', fontSize: 13 }}>{err}</div>}
+        {items.map((it, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '3px 2px' }}>
+            <span style={{ flex: 'none' }}>{icon[it.status]}</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              {it.title || `第 ${i + 1} 篇`}
+              {it.msg && <span style={{ color: 'var(--muted)', marginLeft: 8, fontSize: 12.5 }}>{it.msg}</span>}
+            </span>
+          </div>
+        ))}
+        {!err && !items.length && <div className="loading-dot">正在解析提纲…</div>}
+      </div>
+      <div className="rail-note" style={{ marginTop: 8 }}>
+        笔记按提纲从最小等级逐篇生成，已存在的自动跳过；关闭窗口会中止后续生成，已完成的不受影响。
       </div>
     </Modal>
   )

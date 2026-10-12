@@ -45,7 +45,7 @@ export default function TopBar({ onToggleSidebar }: { onToggleSidebar?: () => vo
   } else if (location.pathname.startsWith('/settings')) {
     parts.push({ label: '设置' })
     const tab = params.get('tab')
-    const names: Record<string, string> = { general: '通用', reader: '阅读与高亮', model: 'AI 模型', graph: '双链与图谱', io: '导入与导出' }
+    const names: Record<string, string> = { general: '通用', topics: '主题管理', reader: '阅读与高亮', model: 'AI 模型', graph: '双链与图谱', io: '导入与导出' }
     if (tab && names[tab]) parts.push({ label: names[tab], cur: true })
   }
 

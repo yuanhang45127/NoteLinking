@@ -1,7 +1,7 @@
 // 后端 API 客户端 + SSE 流式工具
 import type {
-  Annotation, Checklist, Exam, Goal, GraphData, NoteDetail, Provider, Settings,
-  Topic, TreeNode,
+  Annotation, ArxivResult, Checklist, Exam, Goal, GraphData, NoteDetail, Paper, Provider, Settings,
+  Topic, TreeNode, ZoteroCollection, ZoteroConfig, ZoteroSyncResult,
 } from './types'
 
 async function http<T>(url: string, init?: RequestInit): Promise<T> {
@@ -40,6 +40,35 @@ export const api = {
   createTopic: (name: string) => post<Topic>('/api/topics', { name }),
   setTopicEmoji: (name: string, emoji: string) =>
     put<{ name: string; emoji: string }>(`/api/topics/${encodeURIComponent(name)}/emoji`, { emoji }),
+  deleteTopic: (name: string, recursive = false) =>
+    del<unknown>(`/api/topics/${encodeURIComponent(name)}?recursive=${recursive}`),
+  // 文献库（Zotero 思路：检索收录 / 状态 / 标签 / 想法）
+  papers: (topic: string) => http<{ papers: Paper[] }>(`/api/papers?${qs({ topic })}`),
+  addPaper: (topic: string, paper: unknown) => post<Paper>(`/api/papers?${qs({ topic })}`, paper),
+  updatePaper: (topic: string, id: string, patch: unknown) =>
+    put<Paper>(`/api/papers/${encodeURIComponent(id)}?${qs({ topic })}`, patch),
+  deletePaper: (topic: string, id: string) =>
+    del<unknown>(`/api/papers/${encodeURIComponent(id)}?${qs({ topic })}`),
+  searchArxiv: (q: string, max_results = 15) =>
+    http<{ results: ArxivResult[] }>(`/api/papers/search-arxiv?${qs({ q, max_results })}`),
+  // Zotero 同步
+  zoteroConfig: () => http<ZoteroConfig>('/api/papers/zotero/config'),
+  saveZoteroConfig: (cfg: Partial<ZoteroConfig>) =>
+    put<ZoteroConfig>('/api/papers/zotero/config', cfg),
+  zoteroStatus: () =>
+    http<{ ok: boolean; collections: ZoteroCollection[]; config: ZoteroConfig }>('/api/papers/zotero/status'),
+  zoteroSync: (body: { topic: string; download_pdf?: boolean }) =>
+    post<ZoteroSyncResult>('/api/papers/zotero/sync', body),
+  fetchPaperPdf: (topic: string, id: string) =>
+    post<{ pdf_path: string; url: string }>(`/api/papers/${encodeURIComponent(id)}/fetch-pdf?${qs({ topic })}`, {}),
+  importPaperText: (topic: string, id: string) =>
+    post<NoteDetail>(`/api/papers/${encodeURIComponent(id)}/import-text?${qs({ topic })}`, {}),
+  // 非流式生成笔记（用于文献阅读笔记等程序化调用）
+  generateNote: (body: { topic: string; prompt: string; title?: string; save_path?: string }) =>
+    post<{ text: string; saved_path?: string }>('/api/llm/generate-note', body),
+  // 按整体架构「建议知识架构」生成主题目录骨架
+  scaffoldTopic: (topic: string, savePath?: string) =>
+    post<{ created: string[]; skipped: string[] }>('/api/llm/topic-architecture/scaffold', { topic, save_path: savePath || '' }),
   tree: (path = '') => http<TreeNode>(`/api/tree?${qs({ path })}`),
 
   // 模型列表（从服务商接口实时拉取）
@@ -230,4 +259,5 @@ export const streamUrls = {
   checklist: '/api/exams/checklist/stream',
   studyGuide: '/api/llm/study-guide/stream',
   topicArchitecture: '/api/llm/topic-architecture/stream',
+  topicGenerateNotes: '/api/llm/topic-architecture/generate-notes/stream',
 }

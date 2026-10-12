@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, getModelOverride, llmUrls, streamSSE } from '../api'
 import { useApp } from '../store'
 import type { Annotation, NoteDetail } from '../types'
-import { applyHighlights, selectionInfo } from '../lib/highlight'
+import { applyHighlights, applyInlineComments, selectionInfo } from '../lib/highlight'
 import { renderMarkdown, stripFrontAndH1 } from '../lib/md'
 import type { TocItem } from '../lib/md'
 import Modal from './Modal'
@@ -68,6 +68,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     el.innerHTML = html
     autoLinkConcepts(el, conceptNames)
     applyHighlights(el, note.annotations)
+    applyInlineComments(el, note.annotations)
     // 目录：从渲染结果里收集 h2/h3
     const items: TocItem[] = []
     el.querySelectorAll('h2[id], h3[id]').forEach((h) => {

@@ -110,3 +110,21 @@ export function selectionInfo(root: HTMLElement) {
     occurrence: 1,
   }
 }
+
+/** 在正文中内联显示带批注内容的高亮（跟在对应高亮后面）。
+ *  开关存于 localStorage nl-ann-inline：缺省开启，'0' 为关闭。 */
+export function applyInlineComments(root: HTMLElement, annotations: Annotation[]) {
+  root.querySelectorAll('.ann-inline').forEach((el) => el.remove())
+  if (localStorage.getItem('nl-ann-inline') === '0') return
+  for (const ann of annotations) {
+    if (!ann.comment || !ann.comment.trim()) continue
+    const mark = root.querySelector(`mark.hl-anchor[data-ann-id="${CSS.escape(ann.id)}"]`) as HTMLElement | null
+    if (!mark || mark.nextElementSibling?.classList.contains('ann-inline')) continue
+    const chip = document.createElement('span')
+    chip.className = 'ann-inline'
+    chip.style.setProperty('--hl', ann.color)
+    chip.dataset.annId = ann.id
+    chip.textContent = `💬 ${ann.comment}`
+    mark.parentNode?.insertBefore(chip, mark.nextSibling)
+  }
+}

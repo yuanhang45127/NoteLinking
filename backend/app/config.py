@@ -84,3 +84,9 @@ def get_checklists_dir() -> Path:
     d = get_user_data_dir() / "checklists"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def get_papers_dir() -> Path:
+    d = get_user_data_dir() / "papers"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

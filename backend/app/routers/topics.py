@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 
 from ..schemas import TopicCreate, TopicEmoji, TopicRename
-from ..services import vault
+from ..services import papers_store, vault
 
 router = APIRouter(prefix="/api", tags=["topics"])
 
@@ -19,7 +19,9 @@ def create_topic(body: TopicCreate):
 
 @router.patch("/topics/{name}")
 def rename_topic(name: str, body: TopicRename):
-    return vault.rename_topic(name, body.name)
+    result = vault.rename_topic(name, body.name)
+    papers_store.rename_topic_papers(name, body.name)
+    return result
 
 
 @router.put("/topics/{name}/emoji")
@@ -31,6 +33,7 @@ def set_topic_emoji(name: str, body: TopicEmoji):
 @router.delete("/topics/{name}")
 def delete_topic(name: str, recursive: bool = False):
     vault.delete_topic(name, recursive=recursive)
+    papers_store.delete_topic_papers(name)  # 文献库随主题一并清理
     return {"ok": True}
 
 

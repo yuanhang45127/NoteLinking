@@ -8,6 +8,7 @@ import { IconDownload, IconFilePdf, IconPlus, IconTrash } from '../components/Ic
 
 const TABS = [
   { key: 'general', label: '通用' },
+  { key: 'topics', label: '主题管理' },
   { key: 'reader', label: '阅读与高亮' },
   { key: 'model', label: 'AI 模型' },
   { key: 'graph', label: '双链与图谱' },
@@ -34,6 +35,7 @@ export default function SettingsPage() {
         {tab === 'graph' && <GraphPanel />}
         {tab === 'io' && <IoPanel />}
         {tab === 'general' && <GeneralPanel />}
+        {tab === 'topics' && <TopicsPanel />}
       </div>
     </div>
   )
@@ -44,6 +46,7 @@ function ReaderPanel() {
   const { settings, refreshSettings, toast } = useApp()
   const [hl, setHl] = useState<Settings['highlight']>({ color: '#fef08a', style: 'background' })
   const [reader, setReader] = useState<Settings['reader']>({ selection_menu: true, auto_concept: true, context_scope: 'section' })
+  const [annInline, setAnnInline] = useState(() => localStorage.getItem('nl-ann-inline') !== '0')
   const [dirty, setDirty] = useState(false)
 
   useEffect(() => {
@@ -103,6 +106,20 @@ function ReaderPanel() {
           训练前先确定损失函数。
           <span style={sampleStyle}>我的理解：前向传播负责"算答案"，反向传播负责"改错"，两者交替直到收敛。</span>
           两者交替直到收敛。
+        </div>
+      </div>
+
+      <div className="settings-card">
+        <h3>批注显示</h3>
+        <div className="setting-line">
+          <div>
+            <div className="sl-text">在笔记正文中显示高亮批注的内容</div>
+            <div className="sl-sub">开启后，写有想法的高亮会在原文后面内联显示批注卡片；重新打开笔记后生效</div>
+          </div>
+          <Toggle checked={annInline} onChange={(v) => {
+            setAnnInline(v)
+            localStorage.setItem('nl-ann-inline', v ? '1' : '0')
+          }} />
         </div>
       </div>
 
@@ -418,6 +435,55 @@ function GeneralPanel() {
           <div className="sl-sub">n 笔记 · g 图谱 · e 考试 · s 设置</div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/* ---------------- 主题管理 ---------------- */
+function TopicsPanel() {
+  const { topics, activeTopic, setActiveTopic, refreshTopics, refreshTree, toast } = useApp()
+  const [busy, setBusy] = useState('')
+
+  const remove = async (name: string, count: number) => {
+    const tip = count > 0
+      ? `主题「${name}」下有 ${count} 篇内容，其中的全部笔记与概念文档都将一并删除，不可恢复！确定删除？`
+      : `确定删除主题「${name}」？`
+    if (!window.confirm(tip)) return
+    setBusy(name)
+    try {
+      await api.deleteTopic(name, true)
+      toast(`已删除主题「${name}」`)
+      if (activeTopic === name) {
+        setActiveTopic(topics.find((t) => t.name !== name)?.name || '')
+      }
+      await refreshTopics()
+      refreshTree()
+    } catch (e: any) { toast(e.message, 'err') }
+    finally { setBusy('') }
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>主题管理</h3>
+      <div className="sl-sub" style={{ marginBottom: 14 }}>
+        删除主题会一并删除其中的全部笔记与概念文档，操作不可恢复。
+      </div>
+      {topics.map((t) => (
+        <div className="setting-line" key={t.path} style={{ borderBottom: '1px solid var(--border)' }}>
+          <div>
+            <div className="sl-text">
+              {t.emoji ? `${t.emoji} ` : ''}{t.name}
+              {t.name === activeTopic && <span className="tag" style={{ marginLeft: 8 }}>当前</span>}
+            </div>
+            <div className="sl-sub">{t.note_count} 篇内容</div>
+          </div>
+          <button className="btn small danger" disabled={busy === t.name}
+            onClick={() => remove(t.name, t.note_count)}>
+            <IconTrash size={14} /> 删除
+          </button>
+        </div>
+      ))}
+      {!topics.length && <div className="sl-sub">还没有主题。</div>}
     </div>
   )
 }

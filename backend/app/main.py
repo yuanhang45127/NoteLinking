@@ -27,6 +27,7 @@ from .routers import (
     llm,
     misc,
     notes,
+    papers,
     settings,
     terms,
     topics,
@@ -133,6 +134,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(topics.router)
 app.include_router(notes.router)
+app.include_router(papers.router)
 app.include_router(annotations.router)
 app.include_router(llm.router)
 app.include_router(terms.router)
