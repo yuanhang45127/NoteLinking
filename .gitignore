@@ -16,6 +16,9 @@ node_modules/
 dist/
 .vite/
 
+# 日志
+*.log
+
 # 系统
 .DS_Store
 Thumbs.db

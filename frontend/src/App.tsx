@@ -15,6 +15,13 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const isGraph = location.pathname.startsWith('/graph')
+  // 窄屏下侧边栏抽屉的开关（宽屏由 CSS 忽略，常驻显示）
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // 路由变化后自动收起抽屉
+  useEffect(() => {
+    setSidebarOpen(false)
+  }, [location.pathname, location.search])
 
   const proceed = useCallback(() => {
     setAuthReady(true)
@@ -68,10 +75,11 @@ export default function App() {
   if (gate === 'token') return <TokenGate onOk={proceed} />
 
   return (
-    <div className="app">
+    <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
       <Sidebar />
+      <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
       <div className="main">
-        <TopBar />
+        <TopBar onToggleSidebar={() => setSidebarOpen((v) => !v)} />
         <div className="page-scroll" style={isGraph ? { display: 'flex', flexDirection: 'column' } : undefined}>
           <Outlet />
         </div>

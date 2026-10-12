@@ -8,6 +8,7 @@ import { applyHighlights, selectionInfo } from '../lib/highlight'
 import { renderMarkdown, stripFrontAndH1 } from '../lib/md'
 import type { TocItem } from '../lib/md'
 import Modal from './Modal'
+import StreamMd from './StreamMd'
 import TermStreamModal from './TermStreamModal'
 import {
   IconBulb, IconConcept, IconEdit, IconFilePdf, IconLink, IconList,
@@ -366,7 +367,9 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
             <blockquote className="context-quote" style={{ marginTop: 0 }}>
               <div className="q">{askOpen.quote}</div>
             </blockquote>
-            <div className={`stream-box ${askOpen.streaming && !askOpen.text ? 'loading-dot' : ''}`}>{askOpen.text || ' '}</div>
+            <div className={`stream-box ${askOpen.streaming && !askOpen.text ? 'loading-dot' : ''}`}>
+              <StreamMd text={askOpen.text} streaming={askOpen.streaming} />
+            </div>
           </Modal>
         )}
 
@@ -541,7 +544,9 @@ function RegenModal({ note, onClose, onDone, toast }: { note: NoteDetail; onClos
         <textarea className="text-input" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
       </div>
       {(text || running) && (
-        <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`} style={{ marginTop: 6 }}>{text || ' '}</div>
+        <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`} style={{ marginTop: 6 }}>
+          <StreamMd text={text} streaming={running} />
+        </div>
       )}
     </Modal>
   )
@@ -579,7 +584,9 @@ function ContinueModal({ note, onClose, onDone, toast }: { note: NoteDetail; onC
           <button className="btn" onClick={onClose}>关闭</button>
         </>
       }>
-      <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`}>{text || ' '}</div>
+      <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`}>
+        <StreamMd text={text} streaming={running} />
+      </div>
     </Modal>
   )
 }

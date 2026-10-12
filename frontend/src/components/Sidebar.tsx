@@ -7,6 +7,7 @@ import {
   IconFolderOpen, IconGear, IconGraph, IconGrad, IconNote, IconPlus,
 } from './Icons'
 import Modal from './Modal'
+import StreamMd from './StreamMd'
 import type { TreeNode } from '../types'
 
 const EMOJI_CHOICES = [
@@ -23,7 +24,8 @@ export default function Sidebar() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newTopic, setNewTopic] = useState('')
-  const [emojiOpen, setEmojiOpen] = useState(false)
+  // 图标编辑面板面向的主题（null = 关闭）；点主题旁的图标直接唤起
+  const [emojiFor, setEmojiFor] = useState<string | null>(null)
   const [custom, setCustom] = useState('')
   const [archOpen, setArchOpen] = useState(false)
   // 多选批量操作
@@ -38,6 +40,7 @@ export default function Sidebar() {
   const isGraphPage = location.pathname.startsWith('/graph')
   const currentPath = new URLSearchParams(location.search).get('path') || ''
   const currentEmoji = topics.find((t) => t.name === activeTopic)?.emoji || ''
+  const emojiCurrent = topics.find((t) => t.name === emojiFor)?.emoji || ''
 
   // 收集树里全部笔记/概念路径（全选用）
   const allPaths = useMemo(() => {
@@ -142,12 +145,12 @@ export default function Sidebar() {
   }
 
   const pickEmoji = async (emoji: string) => {
-    if (!activeTopic) return
+    if (!emojiFor) return
     try {
-      await api.setTopicEmoji(activeTopic, emoji)
+      await api.setTopicEmoji(emojiFor, emoji)
       await refreshTopics()
-      setEmojiOpen(false); setCustom('')
-      toast(emoji ? `「${activeTopic}」图标已设为 ${emoji}` : '图标已清除')
+      setEmojiFor(null); setCustom('')
+      toast(emoji ? `「${emojiFor}」图标已设为 ${emoji}` : '图标已清除')
     } catch (e: any) { toast(e.message, 'err') }
   }
 
@@ -190,7 +193,10 @@ export default function Sidebar() {
       <div className="topic-select">
         <button className={`topic-btn ${menuOpen ? 'open' : ''}`} onClick={() => setMenuOpen((v) => !v)}>
           {currentEmoji
-            ? <span className="topic-emoji">{currentEmoji}</span>
+            ? <span className="topic-emoji emoji-editable" title="点击更换图标"
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setCustom(''); setEmojiFor(activeTopic) }}>
+                {currentEmoji}
+              </span>
             : <IconDoc size={17} />}
           <span>{activeTopic || '选择主题'}</span>
           <span className="caret"><IconCaretDown size={15} /></span>
@@ -201,14 +207,18 @@ export default function Sidebar() {
               <button key={t.path} className={t.name === activeTopic ? 'sel' : ''}
                 onClick={() => { setActiveTopic(t.name); setMenuOpen(false) }}>
                 {t.name === activeTopic ? <IconCheck size={15} /> : <span style={{ width: 15 }} />}
-                {t.emoji && <span className="topic-emoji">{t.emoji}</span>}
+                <span className={`topic-emoji emoji-editable ${t.emoji ? '' : 'emoji-empty'}`}
+                  title={t.emoji ? '点击更换此主题图标' : '点击设置图标'}
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setCustom(''); setEmojiFor(t.name) }}>
+                  {t.emoji || '🎨'}
+                </span>
                 {t.name}
                 <span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 12 }}>{t.note_count}</span>
               </button>
             ))}
             {!topics.length && <div className="empty">还没有主题，先新建一个</div>}
             <hr style={{ border: 0, borderTop: '1px solid var(--border)', margin: '6px 4px' }} />
-            <button disabled={!activeTopic} onClick={() => { setEmojiOpen(true); setMenuOpen(false); setCustom('') }}>
+            <button disabled={!activeTopic} onClick={() => { setEmojiFor(activeTopic); setMenuOpen(false); setCustom('') }}>
               <span style={{ width: 15 }} />
               {currentEmoji ? '更换图标' : '选择图标'} 🎨
             </button>
@@ -300,12 +310,12 @@ export default function Sidebar() {
         </div>
       )}
 
-      {emojiOpen && (
-        <Modal title={`「${activeTopic}」的图标`} onClose={() => setEmojiOpen(false)}
-          ops={<button className="btn" onClick={() => setEmojiOpen(false)}>关闭</button>}>
+      {emojiFor && (
+        <Modal title={`「${emojiFor}」的图标`} onClose={() => setEmojiFor(null)}
+          ops={<button className="btn" onClick={() => setEmojiFor(null)}>关闭</button>}>
           <div className="emoji-grid">
             {EMOJI_CHOICES.map((e) => (
-              <button key={e} className={`emoji-cell ${currentEmoji === e ? 'sel' : ''}`}
+              <button key={e} className={`emoji-cell ${emojiCurrent === e ? 'sel' : ''}`}
                 onClick={() => pickEmoji(e)}>{e}</button>
             ))}
           </div>
@@ -316,7 +326,7 @@ export default function Sidebar() {
               onKeyDown={(e) => e.key === 'Enter' && custom.trim() && pickEmoji(custom.trim())} />
             <button className="btn primary" disabled={!custom.trim()} onClick={() => pickEmoji(custom.trim())}>使用</button>
           </div>
-          {currentEmoji && (
+          {emojiCurrent && (
             <button className="btn text" style={{ marginTop: 12 }} onClick={() => pickEmoji('')}>清除当前图标</button>
           )}
         </Modal>
@@ -466,7 +476,7 @@ function ArchitectureModal({ topic, onClose }: { topic: string; onClose: () => v
       {err && <div style={{ color: 'var(--err)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
       {savedPath && <div style={{ color: 'var(--ok)', fontSize: 13, marginBottom: 8 }}>已保存为笔记：{savedPath}</div>}
       <div className={`stream-box ${!text && !err ? 'loading-dot' : ''}`} style={{ maxHeight: 460, overflow: 'auto' }}>
-        {text || ' '}
+        <StreamMd text={text} streaming={!savedPath && !err} />
       </div>
     </Modal>
   )

@@ -5,7 +5,7 @@ import { useApp } from '../store'
 import { IconBell, IconSearch } from './Icons'
 import type { Provider } from '../types'
 
-export default function TopBar() {
+export default function TopBar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const { activeTopic, topics } = useApp()
   const location = useLocation()
   const navigate = useNavigate()
@@ -51,6 +51,16 @@ export default function TopBar() {
 
   return (
     <header className="topbar">
+      <button
+        className="sidebar-toggle"
+        aria-label="打开导航"
+        title="打开导航"
+        onClick={onToggleSidebar}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <path d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
       <nav className="crumb">
         {parts.map((p, i) => (
           <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

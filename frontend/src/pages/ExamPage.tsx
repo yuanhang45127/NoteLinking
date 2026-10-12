@@ -3,6 +3,7 @@ import { api, getModelOverride, llmUrls, streamSSE, streamUrls } from '../api'
 import { useApp } from '../store'
 import type { Attempt, ChatMsg, Checklist, Exam, Goal, Question, TreeNode } from '../types'
 import Modal from '../components/Modal'
+import StreamMd from '../components/StreamMd'
 import { renderMarkdown } from '../lib/md'
 import {
   IconCard, IconCheck, IconConcept, IconDoc, IconFilePdf, IconList,
@@ -285,7 +286,7 @@ export default function ExamPage() {
         <Modal title={`正在生成 · ${genState.label}`} onClose={() => setGenState(null)} wide
           ops={<span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--muted)' }}>流式生成中…</span>}>
           <div className={`stream-box ${!genState.text ? 'loading-dot' : ''}`} style={{ maxHeight: 420, overflow: 'auto' }}>
-            {genState.text || ' '}
+            <StreamMd text={genState.text} streaming />
           </div>
           <div className="rail-note" style={{ marginTop: 8 }}>
             上面是模型的原始输出（出卷/清单为 JSON），仅作进度展示；完成后自动解析并打开。

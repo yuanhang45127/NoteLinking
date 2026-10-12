@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getModelOverride, streamSSE, streamUrls } from '../api'
 import Modal from './Modal'
+import StreamMd from './StreamMd'
 
 /** 概念解释流式生成弹窗：增量展示，落盘后回调 onDone(savedPath)。 */
 export default function TermStreamModal({ path, term, contextBefore, contextAfter, regenerate, onClose, onDone }: {
@@ -55,7 +56,9 @@ export default function TermStreamModal({ path, term, contextBefore, contextAfte
         </>
       }>
       {err && <div style={{ color: 'var(--err)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
-      <div className={`stream-box ${!text && !err ? 'loading-dot' : ''}`}>{text || ' '}</div>
+      <div className={`stream-box ${!text && !err ? 'loading-dot' : ''}`}>
+        <StreamMd text={text} streaming={!savedPath && !err} />
+      </div>
     </Modal>
   )
 }

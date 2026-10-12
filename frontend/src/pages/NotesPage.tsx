@@ -6,6 +6,7 @@ import { useApp } from '../store'
 import type { NoteDetail, TreeNode } from '../types'
 import ReaderView from '../components/ReaderView'
 import Modal from '../components/Modal'
+import StreamMd from '../components/StreamMd'
 
 export default function NotesPage() {
   const { activeTopic, treeTopic, tree, refreshTree, refreshTopics, settings, toast } = useApp()
@@ -175,7 +176,9 @@ function GenerateModal({ topic, onClose, onCreated, toast }: {
           onChange={(e) => setPrompt(e.target.value)} />
       </div>
       {(text || running) && (
-        <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`} style={{ marginTop: 6 }}>{text || ' '}</div>
+        <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`} style={{ marginTop: 6 }}>
+          <StreamMd text={text} streaming={running} />
+        </div>
       )}
     </Modal>
   )

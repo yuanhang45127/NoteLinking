@@ -655,3 +655,62 @@ mark.hl-anchor { cursor: pointer; }
   font-size: 14px; line-height: 1; padding: 0 2px;
 }
 .model-chips .chip button:hover { color: var(--err); }
+
+/* ---------------- 响应式：窄屏适配 ---------------- */
+.sidebar-toggle { display: none; }
+.sidebar-backdrop { display: none; }
+
+/* 中窄屏：右栏（批注/概念/目录）堆到正文下方，避免挤占正文 */
+@media (max-width: 1180px) {
+  .page-with-rail { flex-direction: column; align-items: stretch; }
+  .rail { width: auto; min-width: 0; padding: 0 24px 60px; }
+  .reader { padding: 24px 24px 48px; }
+}
+
+/* 窄屏：侧边栏改为抽屉，由顶栏汉堡按钮唤出 */
+@media (max-width: 900px) {
+  .sidebar {
+    position: fixed; z-index: 90; left: 0; top: 0; bottom: 0;
+    width: 302px; min-width: 0;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+    box-shadow: 0 0 32px rgba(20, 22, 40, 0.25);
+  }
+  .app.sidebar-open .sidebar { transform: none; }
+  .app.sidebar-open .sidebar-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 80;
+    background: rgba(25, 28, 45, 0.4);
+  }
+  .sidebar-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; flex: none;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--card-bg); color: var(--text); cursor: pointer;
+  }
+}
+
+/* 手机：顶栏只留汉堡 + 面包屑 + 搜索 */
+@media (max-width: 720px) {
+  .topbar { gap: 10px; padding: 0 14px; }
+  .model-picker { display: none; }
+  .search { width: auto; flex: 1; min-width: 0; }
+}
+
+/* 主题图标可直接点击更换 */
+.topic-emoji.emoji-editable {
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 3px 5px;
+  margin: -3px -5px;
+  transition: background 0.15s;
+}
+.topic-emoji.emoji-editable:hover { background: var(--primary-weak); }
+.topic-menu .topic-emoji.emoji-editable { margin: -3px 2px -3px -5px; }
+.topic-menu .topic-emoji.emoji-empty { opacity: 0.55; }
+
+/* 流式输出过程中的实时 Markdown 渲染 */
+.stream-box .md-body { white-space: normal; font-size: 14px; }
+.stream-box .md-body > :first-child { margin-top: 0; }
+.stream-box .md-body > :last-child { margin-bottom: 0; }
+.stream-box .md-body h2 { font-size: 17px; margin: 18px 0 8px; }
+.stream-box .md-body h3 { font-size: 15px; margin: 14px 0 6px; }
