@@ -1,10 +1,20 @@
 """笔记 CRUD、反链与全文搜索路由。"""
+from typing import List
+
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from ..schemas import NoteCreate, NoteMove, NoteSave
 from ..services import annotations_store, vault
+from ..utils import sanitize_filename
 
 router = APIRouter(prefix="/api", tags=["notes"])
+
+
+class NoteBatch(BaseModel):
+    action: str  # delete | move
+    paths: List[str]
+    target: str = ""  # move：目标主题（根目录）
 
 
 @router.get("/notes")
@@ -80,3 +90,33 @@ def resolve_link(target: str = Query(...), topic: str = ""):
         raise HTTPException(status_code=404, detail=f"链接目标不存在：{target}")
     chosen = next((c for c in candidates if not topic or c["topic"] == topic), candidates[0])
     return vault.read_note(chosen["path"])
+
+
+@router.post("/notes/batch")
+def batch_notes(body: NoteBatch):
+    """批量删除 / 批量移动到目标主题根目录。返回逐条成功与失败结果。"""
+    if body.action not in ("delete", "move"):
+        raise HTTPException(status_code=400, detail="action 仅支持 delete / move")
+    if not body.paths:
+        raise HTTPException(status_code=400, detail="paths 不能为空")
+
+    ok, failed = [], []
+    if body.action == "delete":
+        for p in body.paths:
+            try:
+                vault.delete_note(p)
+                ok.append(p)
+            except HTTPException as e:
+                failed.append({"path": p, "detail": e.detail})
+        return {"ok": ok, "failed": failed}
+
+    target = sanitize_filename(body.target, "")
+    if not target:
+        raise HTTPException(status_code=400, detail="移动目标主题不能为空")
+    for p in body.paths:
+        try:
+            vault.move_note(p, f"{target}/{p.split('/')[-1]}")
+            ok.append(p)
+        except HTTPException as e:
+            failed.append({"path": p, "detail": e.detail})
+    return {"ok": ok, "failed": failed}

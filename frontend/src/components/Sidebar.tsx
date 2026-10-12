@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api, getModelOverride, streamSSE, streamUrls } from '../api'
 import { useApp } from '../store'
@@ -26,12 +26,108 @@ export default function Sidebar() {
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [custom, setCustom] = useState('')
   const [archOpen, setArchOpen] = useState(false)
+  // 多选批量操作
+  const [selectMode, setSelectMode] = useState(false)
+  const [checked, setChecked] = useState<Set<string>>(new Set())
+  const [moving, setMoving] = useState(false)
+  // 单行 ⋮ 菜单
+  const [rowMenu, setRowMenu] = useState<{ path: string; name: string; isTerm: boolean; x: number; y: number } | null>(null)
   const location = useLocation()
   const navigate = useNavigate()
 
   const isGraphPage = location.pathname.startsWith('/graph')
   const currentPath = new URLSearchParams(location.search).get('path') || ''
   const currentEmoji = topics.find((t) => t.name === activeTopic)?.emoji || ''
+
+  // 收集树里全部笔记/概念路径（全选用）
+  const allPaths = useMemo(() => {
+    const out: string[] = []
+    const walk = (n: TreeNode | null) => {
+      if (!n?.children) return
+      for (const c of n.children) {
+        if (c.type === 'note' || c.type === 'term') out.push(c.path)
+        else if (c.type === 'dir') walk(c)
+      }
+    }
+    walk(tree)
+    return out
+  }, [tree])
+
+  useEffect(() => {
+    if (!rowMenu) return
+    const close = () => setRowMenu(null)
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [rowMenu])
+
+  const toggleCheck = (path: string) => {
+    setChecked((s) => {
+      const next = new Set(s)
+      next.has(path) ? next.delete(path) : next.add(path)
+      return next
+    })
+  }
+
+  const exitSelect = () => { setSelectMode(false); setChecked(new Set()); setMoving(false) }
+
+  const afterDelete = (deleted: string[]) => {
+    if (currentPath && deleted.includes(currentPath)) navigate('/notes')
+  }
+
+  const openRowMenu = (path: string, name: string, isTerm: boolean, e: React.MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setRowMenu({ path, name, isTerm, x: Math.max(8, rect.right - 150), y: rect.bottom + 4 })
+  }
+
+  const renameNote = async (path: string, name: string) => {
+    const input = window.prompt('重命名为：', name.replace(/\.md$/i, ''))
+    if (!input) return
+    const clean = input.trim().replace(/[\\/:*?"<>|]/g, ' ').trim()
+    if (!clean) return
+    const dst = path.split('/').slice(0, -1).concat(`${clean}.md`).join('/')
+    try {
+      await api.moveNote(path, dst)
+      setRowMenu(null)
+      toast('已重命名')
+      await refreshTree(); refreshTopics()
+      if (currentPath === path) {
+        navigate(`${path.startsWith(`${activeTopic}/terms/`) ? '/concept' : '/notes'}?path=${encodeURIComponent(dst)}`)
+      }
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const deleteNote = async (path: string, name: string) => {
+    if (!window.confirm(`确定删除「${name}」？此操作不可恢复。`)) return
+    try {
+      await api.deleteNote(path)
+      setRowMenu(null)
+      toast('已删除')
+      await refreshTree(); refreshTopics()
+      afterDelete([path])
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const batchDelete = async () => {
+    if (!checked.size) return
+    if (!window.confirm(`批量删除选中的 ${checked.size} 项？此操作不可恢复。`)) return
+    try {
+      const res = await api.batchNotes('delete', [...checked])
+      toast(`已删除 ${res.ok.length} 项${res.failed.length ? `，失败 ${res.failed.length} 项` : ''}`, res.failed.length ? 'err' : 'ok')
+      afterDelete(res.ok)
+      exitSelect()
+      await refreshTree(); refreshTopics()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const batchMove = async (target: string) => {
+    try {
+      const res = await api.batchNotes('move', [...checked], target)
+      toast(`已移动 ${res.ok.length} 项到「${target}」${res.failed.length ? `，失败 ${res.failed.length} 项` : ''}`, res.failed.length ? 'err' : 'ok')
+      afterDelete(res.ok)
+      exitSelect()
+      await refreshTree(); refreshTopics()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
 
   const createTopic = async () => {
     const name = newTopic.trim()
@@ -81,7 +177,16 @@ export default function Sidebar() {
       </button>
 
       <hr className="side-divider" />
-      <div className="nav-label">主题</div>
+      <div className="nav-label" style={{ display: 'flex', alignItems: 'center' }}>
+        主题
+        {activeTopic && (
+          <button className={`mini-toggle ${selectMode ? 'on' : ''}`}
+            title="多选笔记，进行批量删除或移动"
+            onClick={() => { setRowMenu(null); selectMode ? exitSelect() : setSelectMode(true) }}>
+            {selectMode ? '退出多选' : '多选'}
+          </button>
+        )}
+      </div>
       <div className="topic-select">
         <button className={`topic-btn ${menuOpen ? 'open' : ''}`} onClick={() => setMenuOpen((v) => !v)}>
           <IconDoc size={17} />
@@ -115,8 +220,52 @@ export default function Sidebar() {
       </div>
 
       <div className="tree">
-        {activeTopic && <TreeFolder node={tree} topic={activeTopic} currentPath={currentPath} depth={0} />}
+        {activeTopic && (
+          <TreeFolder
+            node={tree}
+            topic={activeTopic}
+            currentPath={currentPath}
+            depth={0}
+            selectMode={selectMode}
+            checked={checked}
+            onCheck={toggleCheck}
+            onMenu={openRowMenu}
+          />
+        )}
         {!activeTopic && <div className="side-hint">创建主题后，这里会显示对应主题的文件目录。</div>}
+
+        {selectMode && (
+          <div className="batch-bar">
+            <div className="bb-head">
+              <label className="check-row" style={{ cursor: 'pointer', gap: 6 }}>
+                <input type="checkbox" checked={false}
+                  onChange={() => setChecked(new Set(allPaths))} />
+                全选
+              </label>
+              <span className="count">已选 {checked.size} / {allPaths.length}</span>
+            </div>
+            {moving ? (
+              <div className="bb-actions">
+                <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>移动到：</span>
+                {topics.filter((t) => t.name !== activeTopic).map((t) => (
+                  <button key={t.path} className="btn small" onClick={() => batchMove(t.name)}>
+                    {t.emoji}{t.name}
+                  </button>
+                ))}
+                {!topics.filter((t) => t.name !== activeTopic).length && (
+                  <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>没有其他主题</span>
+                )}
+                <button className="btn small text" style={{ marginLeft: 'auto' }} onClick={() => setMoving(false)}>收起</button>
+              </div>
+            ) : (
+              <div className="bb-actions">
+                <button className="btn small" disabled={!checked.size} onClick={() => setMoving(true)}>移动</button>
+                <button className="btn small danger" disabled={!checked.size} onClick={batchDelete}>删除</button>
+                <button className="btn small text" style={{ marginLeft: 'auto' }} onClick={exitSelect}>取消</button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {isGraphPage && (
@@ -140,6 +289,14 @@ export default function Sidebar() {
 
       {archOpen && activeTopic && (
         <ArchitectureModal topic={activeTopic} onClose={() => setArchOpen(false)} />
+      )}
+
+      {rowMenu && (
+        <div className="row-menu-pop" style={{ left: rowMenu.x, top: rowMenu.y }}
+          onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => renameNote(rowMenu.path, rowMenu.name)}>✏️ 重命名</button>
+          <button className="danger" onClick={() => deleteNote(rowMenu.path, rowMenu.name)}>🗑 删除</button>
+        </div>
       )}
 
       {emojiOpen && (
@@ -167,7 +324,16 @@ export default function Sidebar() {
   )
 }
 
-function TreeFolder({ node, topic, currentPath, depth }: { node: TreeNode | null; topic: string; currentPath: string; depth: number }) {
+function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCheck, onMenu }: {
+  node: TreeNode | null
+  topic: string
+  currentPath: string
+  depth: number
+  selectMode: boolean
+  checked: Set<string>
+  onCheck: (path: string) => void
+  onMenu: (path: string, name: string, isTerm: boolean, e: React.MouseEvent) => void
+}) {
   const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => {
     try { return JSON.parse(localStorage.getItem('nl-tree-open') || '{}') } catch { return {} }
   })
@@ -181,9 +347,11 @@ function TreeFolder({ node, topic, currentPath, depth }: { node: TreeNode | null
   const renderChildren = (children: TreeNode[]) =>
     children.map((child) =>
       child.type === 'dir' ? (
-        <TreeFolder key={child.path} node={child} topic={topic} currentPath={currentPath} depth={depth + 1} />
+        <TreeFolder key={child.path} node={child} topic={topic} currentPath={currentPath} depth={depth + 1}
+          selectMode={selectMode} checked={checked} onCheck={onCheck} onMenu={onMenu} />
       ) : (
-        <TreeLeaf key={child.path} node={child} currentPath={currentPath} />
+        <TreeLeaf key={child.path} node={child} currentPath={currentPath}
+          selectMode={selectMode} checked={checked.has(child.path)} onCheck={onCheck} onMenu={onMenu} />
       ),
     )
 
@@ -205,25 +373,52 @@ function TreeFolder({ node, topic, currentPath, depth }: { node: TreeNode | null
   )
 }
 
-function TreeLeaf({ node, currentPath }: { node: TreeNode; currentPath: string }) {
+function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu }: {
+  node: TreeNode
+  currentPath: string
+  selectMode: boolean
+  checked: boolean
+  onCheck: (path: string) => void
+  onMenu: (path: string, name: string, isTerm: boolean, e: React.MouseEvent) => void
+}) {
   const navigate = useNavigate()
-  const { refreshTree, refreshTopics } = useApp()
   const isTerm = node.type === 'term'
   const active = currentPath === node.path
 
-  const open = async () => {
+  if (selectMode) {
+    return (
+      <div className={`tree-row selectable ${checked ? 'checked' : ''}`}>
+        <input type="checkbox" checked={checked} onChange={() => onCheck(node.path)} />
+        {isTerm
+          ? <span className="icon-concept"><IconConcept size={15} /></span>
+          : <span className="icon-note"><IconDoc size={15} /></span>}
+        <span className="name" onClick={() => onCheck(node.path)} style={{ cursor: 'pointer' }}>
+          {node.name}{!isTerm && <span className="ext">.md</span>}
+        </span>
+        {isTerm && <span className="kind-tag">概念</span>}
+      </div>
+    )
+  }
+
+  const open = () => {
     if (isTerm) navigate(`/concept?path=${encodeURIComponent(node.path)}`)
     else navigate(`/notes?path=${encodeURIComponent(node.path)}`)
   }
 
   return (
-    <button className={`tree-row ${active ? 'active' : ''}`} onClick={open} title={node.path}>
-      {isTerm
-        ? <span className="icon-concept"><IconConcept size={15} /></span>
-        : <span className="icon-note"><IconDoc size={15} /></span>}
-      <span className="name">{node.name}{!isTerm && <span className="ext">.md</span>}</span>
-      {isTerm && <span className="kind-tag">概念</span>}
-    </button>
+    <div className={`tree-row-wrap ${active ? 'active' : ''}`}>
+      <button className="tree-row" onClick={open} title={node.path}>
+        {isTerm
+          ? <span className="icon-concept"><IconConcept size={15} /></span>
+          : <span className="icon-note"><IconDoc size={15} /></span>}
+        <span className="name">{node.name}{!isTerm && <span className="ext">.md</span>}</span>
+        {isTerm && <span className="kind-tag">概念</span>}
+      </button>
+      <button className="row-menu" title="更多操作"
+        onClick={(e) => { e.stopPropagation(); onMenu(node.path, node.name.replace(/\.md$/i, ''), isTerm, e) }}>
+        ⋮
+      </button>
+    </div>
   )
 }
 

@@ -51,6 +51,9 @@ export const api = {
   createNote: (path: string, content = '') => post<NoteDetail>('/api/notes', { path, content }),
   saveNote: (path: string, content: string) => put<NoteDetail>('/api/notes', { path, content }),
   deleteNote: (path: string) => del<unknown>(`/api/notes?${qs({ path })}`),
+  moveNote: (src: string, dst: string) => post<NoteDetail>('/api/notes/move', { src, dst }),
+  batchNotes: (action: 'delete' | 'move', paths: string[], target?: string) =>
+    post<{ ok: string[]; failed: { path: string; detail: string }[] }>('/api/notes/batch', { action, paths, target }),
   backlinks: (path: string) =>
     http<{ backlinks: NoteDetail['backlinks'] }>(`/api/notes/backlinks?${qs({ path })}`),
   search: (q: string, topic?: string) =>

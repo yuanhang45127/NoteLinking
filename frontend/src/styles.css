@@ -112,6 +112,57 @@ a { color: inherit; }
 }
 .tree-row .icon-note { color: #8a90a0; flex: none; }
 .tree-row .icon-concept { color: var(--concept); flex: none; }
+
+/* 树行：主按钮 + ⋮ 菜单（悬停/选中态出现） */
+.tree-row-wrap { position: relative; display: flex; align-items: center; }
+.tree-row-wrap .tree-row { padding-right: 30px; }
+.tree-row-wrap.active .tree-row { background: var(--primary-weak); color: var(--primary); font-weight: 600; }
+.row-menu {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  border: 0; background: none; color: var(--muted); font-weight: 700;
+  padding: 2px 7px; border-radius: 7px; cursor: pointer; letter-spacing: 1px;
+  opacity: 0; transition: opacity 0.12s;
+}
+.tree-row-wrap:hover .row-menu, .tree-row-wrap.active .row-menu { opacity: 1; }
+.row-menu:hover { background: #e8e9f2; color: var(--text); }
+
+.row-menu-pop {
+  position: fixed; z-index: 260; min-width: 132px;
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 6px; animation: pop 0.12s ease-out;
+}
+.row-menu-pop button {
+  display: block; width: 100%; text-align: left;
+  border: 0; background: none; padding: 8px 10px;
+  border-radius: 8px; font-size: 13.5px; color: var(--text); cursor: pointer;
+}
+.row-menu-pop button:hover { background: #f0f0f4; }
+.row-menu-pop button.danger { color: var(--err); }
+
+/* 多选模式 */
+.nav-label { display: flex; align-items: center; justify-content: space-between; }
+.mini-toggle {
+  border: 1px solid var(--border); background: #fff; color: var(--muted);
+  font-size: 11.5px; border-radius: 7px; padding: 2px 8px; cursor: pointer;
+}
+.mini-toggle:hover { color: var(--text); border-color: #d8d9e2; }
+.mini-toggle.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.tree-row.selectable { cursor: pointer; }
+.tree-row.selectable.checked { background: var(--primary-weak); }
+.tree-row.selectable input[type="checkbox"] { accent-color: var(--primary); flex: none; }
+
+/* 批量操作栏 */
+.batch-bar {
+  margin: 10px 2px 0; border: 1px solid var(--primary-border);
+  background: var(--primary-weak); border-radius: 12px; padding: 10px;
+}
+.batch-bar .bb-head { display: flex; align-items: center; justify-content: space-between; }
+.batch-bar .check-row { font-size: 13px; color: var(--text); }
+.batch-bar .count { font-size: 12.5px; color: var(--muted); }
+.batch-bar .bb-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.batch-bar .btn.danger { color: var(--err); border-color: #f3c4cb; }
+.batch-bar .btn.danger:hover { background: #fdeaee; border-color: var(--err); }
+
 .side-footer { padding-top: 10px; }
 .side-hint { color: var(--muted-2); font-size: 12px; line-height: 1.6; padding: 6px 8px; }
 
