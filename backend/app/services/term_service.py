@@ -49,16 +49,14 @@ def locate_in_note(content: str, keyword: str) -> Tuple[str, str]:
     return section or "开头", (quote or body.strip()[:120])
 
 
-async def create_term_doc(
+async def prepare_term(
     note_rel: str,
     term: str,
     context_before: str = "",
     context_after: str = "",
     language: str = "zh",
-    regenerate: bool = False,
-    provider_id: str = "",
-    model: str = "",
 ) -> Dict:
+    """校验并构造概念解释生成所需的 prompt 与落盘元数据（流式/非流式共用）。"""
     term = term.strip()
     if not term:
         raise HTTPException(status_code=400, detail="词条不能为空")
@@ -73,14 +71,24 @@ async def create_term_doc(
         f"……{context_before.strip()[-600:]}【{term}】{context_after.strip()[:600]}……\n\n"
         f"请解释词组/术语「{term}」在这段上下文中的意思。{lang_note}"
     )
-    explanation = await complete(
-        provider_id,
-        [
+    return {
+        "messages": [
             {"role": "system", "content": SYSTEM_PROMPT + lang_note},
             {"role": "user", "content": user_msg},
         ],
-        model,
-    )
+        "note": note,
+        "term": term,
+        "origin_section": origin_section,
+        "context_quote": context_quote,
+    }
+
+
+def save_term_doc(plan: Dict, explanation: str, regenerate: bool = False) -> Dict:
+    """把生成的解释落盘（新建 / 重生成 / 追加出处），返回结果结构。"""
+    note = plan["note"]
+    term = plan["term"]
+    origin_section = plan["origin_section"]
+    context_quote = plan["context_quote"]
 
     # 词条文档放在主题根的 terms/ 下
     topic = note["topic"]
@@ -136,6 +144,21 @@ async def create_term_doc(
     updated = ensure_frontmatter(updated, {"sources": sources, "updated": today})
     saved = vault.save_note(target_rel, updated)
     return {**saved, "is_new": False, "appended": True}
+
+
+async def create_term_doc(
+    note_rel: str,
+    term: str,
+    context_before: str = "",
+    context_after: str = "",
+    language: str = "zh",
+    regenerate: bool = False,
+    provider_id: str = "",
+    model: str = "",
+) -> Dict:
+    plan = await prepare_term(note_rel, term, context_before, context_after, language)
+    explanation = await complete(provider_id, plan["messages"], model)
+    return save_term_doc(plan, explanation, regenerate=regenerate)
 
 
 def list_terms(topic: str = "") -> list:

@@ -215,3 +215,11 @@ export const llmUrls = {
   ask: '/api/llm/ask',
   tutorChat: '/api/llm/tutor-chat',
 }
+
+/** 流式生成接口（SSE，协议同 llmUrls：delta/done/error） */
+export const streamUrls = {
+  term: '/api/terms/stream',
+  examGenerate: '/api/exams/generate/stream',
+  checklist: '/api/exams/checklist/stream',
+  studyGuide: '/api/llm/study-guide/stream',
+}

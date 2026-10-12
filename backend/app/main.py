@@ -198,6 +198,7 @@ class SPAStaticFiles(StaticFiles):
 
     兼容新旧 Starlette：旧版返回 404 响应，新版（≥0.33）抛 HTTPException(404)。
     /api/* 不做 SPA 回退——接口 404 保持 JSON 404，避免误回 HTML。
+    index.html 不缓存，避免发版后浏览器拿着旧入口加载旧资源。
     """
 
     async def get_response(self, path: str, scope):
@@ -205,12 +206,14 @@ class SPAStaticFiles(StaticFiles):
         try:
             response = await super().get_response(path, scope)
             if response.status_code == 404 and fallback:
-                return await super().get_response("index.html", scope)
-            return response
+                response = await super().get_response("index.html", scope)
         except HTTPException as exc:
-            if exc.status_code == 404 and fallback:
-                return await super().get_response("index.html", scope)
-            raise
+            if exc.status_code != 404 or not fallback:
+                raise
+            response = await super().get_response("index.html", scope)
+        if response.status_code == 200 and str(getattr(response, "path", "")).endswith("index.html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 # 前端 build 后由同一服务直接托管（backend/app → 仓库根/frontend/dist）

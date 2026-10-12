@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, getModelOverride, llmUrls, streamSSE } from '../api'
+import { api, getModelOverride, llmUrls, streamSSE, streamUrls } from '../api'
 import { useApp } from '../store'
 import type { Attempt, ChatMsg, Checklist, Exam, Goal, Question, TreeNode } from '../types'
 import Modal from '../components/Modal'
@@ -26,6 +26,7 @@ export default function ExamPage() {
   const [guideOpen, setGuideOpen] = useState<string | null>(null)
   const [checklistOpen, setChecklistOpen] = useState(false)
   const [quizModal, setQuizModal] = useState<null | 'smart' | 'mock'>(null)
+  const [genState, setGenState] = useState<{ label: string; text: string } | null>(null)
   const chatEnd = useRef<HTMLDivElement>(null)
 
   const allNotes = useMemo(() => {
@@ -66,20 +67,28 @@ export default function ExamPage() {
     })
   }
 
-  /* ---------- 出题 / 生成 ---------- */
-  const generate = async (opts: { types: string[]; count: number; difficulty: string; label: string }) => {
+  /* ---------- 出题 / 生成（全部流式） ---------- */
+  const generate = (opts: { types: string[]; count: number; difficulty: string; label: string }) => {
     if (!selectedPaths.length) { toast('请先勾选至少一份资料', 'err'); return }
     setBusy(true)
-    try {
-      const exam = await api.generateExam({ paths: selectedPaths, types: opts.types, count: opts.count, difficulty: opts.difficulty })
-      setMessages((m) => [...m, {
-        role: 'assistant',
-        content: `好的，已基于${exam.scope.titles.slice(0, 3).map((t) => `《${t}》`).join('')}生成 ${exam.questions.length} 道题（${opts.types.map((t) => TYPE_LABEL[t] || t).join('、')}，难度 ${opts.difficulty}）。`,
-        quizExamId: exam.id, quizSummary: exam.title,
-      }])
-      setQuiz({ exam, label: opts.label })
-    } catch (e: any) { toast(e.message, 'err') }
-    setBusy(false)
+    setGenState({ label: opts.label, text: '' })
+    streamSSE(streamUrls.examGenerate, {
+      paths: selectedPaths, types: opts.types, count: opts.count,
+      difficulty: opts.difficulty, stream: true, ...getModelOverride(),
+    },
+      (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+      async (evt) => {
+        setGenState(null); setBusy(false)
+        if (!evt?.exam_id) { toast('生成失败，请重试', 'err'); return }
+        const exam: Exam = await api.getExam(evt.exam_id)
+        setMessages((m) => [...m, {
+          role: 'assistant',
+          content: `好的，已基于${exam.scope.titles.slice(0, 3).map((t) => `《${t}》`).join('')}生成 ${exam.questions.length} 道题（${opts.types.map((t) => TYPE_LABEL[t] || t).join('、')}，难度 ${opts.difficulty}）。`,
+          quizExamId: exam.id, quizSummary: exam.title,
+        }])
+        setQuiz({ exam, label: opts.label })
+      },
+      (msg) => { setGenState(null); setBusy(false); toast(msg, 'err') })
   }
 
   const send = async () => {
@@ -106,35 +115,50 @@ export default function ExamPage() {
       (msg) => { setBusy(false); toast(msg, 'err') })
   }
 
-  const quickChecklist = async () => {
+  const quickChecklist = () => {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
-    try {
-      const doc = await api.generateChecklist(selectedPaths)
-      setChecklist(doc)
-      setChecklistOpen(true)
-    } catch (e: any) { toast(e.message, 'err') }
-    setBusy(false)
+    setGenState({ label: '考点清单', text: '' })
+    streamSSE(streamUrls.checklist, { paths: selectedPaths, stream: true, ...getModelOverride() },
+      (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+      (evt) => {
+        setGenState(null); setBusy(false)
+        if (evt?.checklist) { setChecklist(evt.checklist); setChecklistOpen(true) }
+        else toast('生成失败，请重试', 'err')
+      },
+      (msg) => { setGenState(null); setBusy(false); toast(msg, 'err') })
   }
 
-  const quickGuide = async () => {
+  const quickGuide = () => {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
-    try {
-      const { markdown } = await api.studyGuide(selectedPaths)
-      setGuideOpen(markdown)
-    } catch (e: any) { toast(e.message, 'err') }
-    setBusy(false)
+    setGenState({ label: '学习指南', text: '' })
+    streamSSE(streamUrls.studyGuide, { paths: selectedPaths, stream: true, ...getModelOverride() },
+      (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+      (evt) => {
+        setGenState(null); setBusy(false)
+        if (evt?.markdown) setGuideOpen(evt.markdown)
+        else toast('生成失败，请重试', 'err')
+      },
+      (msg) => { setGenState(null); setBusy(false); toast(msg, 'err') })
   }
 
-  const openFlashcards = async () => {
+  const openFlashcards = () => {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
-    try {
-      const exam = await api.generateExam({ paths: selectedPaths, types: ['flashcard'], count: 8, difficulty: 'medium' })
-      setCards(exam.questions.filter((q) => q.type === 'flashcard'))
-    } catch (e: any) { toast(e.message, 'err') }
-    setBusy(false)
+    setGenState({ label: '记忆闪卡', text: '' })
+    streamSSE(streamUrls.examGenerate, {
+      paths: selectedPaths, types: ['flashcard'], count: 8,
+      difficulty: 'medium', stream: true, ...getModelOverride(),
+    },
+      (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+      async (evt) => {
+        setGenState(null); setBusy(false)
+        if (!evt?.exam_id) { toast('生成失败，请重试', 'err'); return }
+        const exam: Exam = await api.getExam(evt.exam_id)
+        setCards(exam.questions.filter((q) => q.type === 'flashcard'))
+      },
+      (msg) => { setGenState(null); setBusy(false); toast(msg, 'err') })
   }
 
   const masteredCount = checklist?.items.filter((i) => i.mastered).length ?? 0
@@ -257,6 +281,18 @@ export default function ExamPage() {
       </div>
 
       {/* 弹窗 */}
+      {genState && (
+        <Modal title={`正在生成 · ${genState.label}`} onClose={() => setGenState(null)} wide
+          ops={<span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--muted)' }}>流式生成中…</span>}>
+          <div className={`stream-box ${!genState.text ? 'loading-dot' : ''}`} style={{ maxHeight: 420, overflow: 'auto' }}>
+            {genState.text || ' '}
+          </div>
+          <div className="rail-note" style={{ marginTop: 8 }}>
+            上面是模型的原始输出（出卷/清单为 JSON），仅作进度展示；完成后自动解析并打开。
+          </div>
+        </Modal>
+      )}
+
       {quizModal && (
         <QuizModal mode={quizModal} onClose={() => setQuizModal(null)} onGenerate={async (opts) => {
           setQuizModal(null)

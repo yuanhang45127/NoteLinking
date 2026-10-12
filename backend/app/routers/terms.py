@@ -3,6 +3,8 @@ from fastapi import APIRouter, Query
 
 from ..schemas import TermRequest
 from ..services import term_service, vault
+from ..services.llm_service import stream_llm
+from .llm import sse_response
 
 router = APIRouter(prefix="/api", tags=["terms"])
 
@@ -20,6 +22,28 @@ async def create_term(body: TermRequest):
         body.provider or "",
         body.model or "",
     )
+
+
+@router.post("/terms/stream")
+async def stream_term(body: TermRequest):
+    """概念解释流式生成：SSE 增量输出，结束时落盘并返回 saved_path。"""
+    plan = await term_service.prepare_term(
+        body.path, body.term, body.context_before, body.context_after, body.language
+    )
+
+    async def gen():
+        buf = []
+        async for delta in stream_llm(body.provider or "", plan["messages"], body.model or ""):
+            buf.append(delta)
+            yield {"type": "delta", "text": delta}
+        saved = term_service.save_term_doc(plan, "".join(buf), regenerate=body.regenerate)
+        done = {"type": "done", "saved_path": saved["path"]}
+        for k in ("is_new", "regenerated", "appended"):
+            if k in saved:
+                done[k] = saved[k]
+        yield done
+
+    return sse_response(gen())
 
 
 @router.get("/terms")

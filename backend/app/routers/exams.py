@@ -5,8 +5,45 @@ from typing import List, Optional
 
 from ..schemas import AttemptRequest, ExamGenerateRequest
 from ..services import exam_service, goals_store
+from ..services.llm_service import stream_llm
+from .llm import sse_response
 
 router = APIRouter(prefix="/api", tags=["exams"])
+
+
+class ChecklistRequest(BaseModel):
+    paths: List[str]
+    language: str = "zh"
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
+class ChecklistToggle(BaseModel):
+    item_id: str
+    mastered: bool
+
+
+@router.post("/exams/generate/stream")
+async def stream_generate_exam(body: ExamGenerateRequest):
+    """出卷流式：SSE 增量输出模型原始文本（JSON，作进度展示），
+    结束时解析、校验、落盘，done 事件返回 exam_id。"""
+    messages, used_titles = exam_service._exam_messages(
+        body.paths, body.types, body.count, body.difficulty, body.language
+    )
+
+    async def gen():
+        buf = []
+        async for delta in stream_llm(body.provider or "", messages, body.model or ""):
+            buf.append(delta)
+            yield {"type": "delta", "text": delta}
+        exam = exam_service._finalize_exam(
+            "".join(buf), body.paths, used_titles, body.types,
+            body.count, body.difficulty, body.language, body.title or "",
+        )
+        yield {"type": "done", "exam_id": exam["id"], "title": exam["title"],
+               "count": len(exam["questions"])}
+
+    return sse_response(gen())
 
 
 @router.post("/exams/generate")
@@ -27,6 +64,19 @@ async def generate_exam(body: ExamGenerateRequest):
 @router.get("/exams")
 def list_exams():
     return {"exams": exam_service.list_exams()}
+
+
+# 注意：/exams/checklist 是静态路径，必须注册在 /exams/{exam_id} 之前，
+# 否则 "checklist" 会被当成试卷 ID 捕获（404）。
+@router.get("/exams/checklist")
+def get_checklist(topic: str):
+    doc = exam_service.get_checklist(topic)
+    return {"checklist": doc}
+
+
+@router.put("/exams/checklist")
+def toggle_checklist(body: ChecklistToggle, topic: str):
+    return exam_service.toggle_checklist_item(topic, body.item_id, body.mastered)
 
 
 @router.get("/exams/{exam_id}")
@@ -54,18 +104,6 @@ def list_attempts(exam_id: str):
 
 
 # ---------------------------------------------------------------- 考点清单
-class ChecklistRequest(BaseModel):
-    paths: List[str]
-    language: str = "zh"
-    provider: Optional[str] = None
-    model: Optional[str] = None
-
-
-class ChecklistToggle(BaseModel):
-    item_id: str
-    mastered: bool
-
-
 @router.post("/exams/checklist")
 async def generate_checklist(body: ChecklistRequest):
     """基于勾选资料生成考点清单（按重要度排序）。"""
@@ -74,15 +112,21 @@ async def generate_checklist(body: ChecklistRequest):
     )
 
 
-@router.get("/exams/checklist")
-def get_checklist(topic: str):
-    doc = exam_service.get_checklist(topic)
-    return {"checklist": doc}
+@router.post("/exams/checklist/stream")
+async def stream_generate_checklist(body: ChecklistRequest):
+    """考点清单流式：SSE 增量输出模型原始文本（JSON，作进度展示），
+    结束时解析、校验、落盘，done 事件返回完整清单文档。"""
+    messages, used = exam_service._checklist_messages(body.paths, body.language)
 
+    async def gen():
+        buf = []
+        async for delta in stream_llm(body.provider or "", messages, body.model or ""):
+            buf.append(delta)
+            yield {"type": "delta", "text": delta}
+        doc = exam_service._finalize_checklist("".join(buf), body.paths, used)
+        yield {"type": "done", "checklist": doc}
 
-@router.put("/exams/checklist")
-def toggle_checklist(body: ChecklistToggle, topic: str):
-    return exam_service.toggle_checklist_item(topic, body.item_id, body.mastered)
+    return sse_response(gen())
 
 
 # ---------------------------------------------------------------- 备考目标

@@ -20,7 +20,7 @@ from ..services.llm_service import LLMError, complete, stream_llm
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 
 
-def _sse(gen):
+def sse_response(gen):
     async def wrapper():
         try:
             async for event in gen:
@@ -97,7 +97,7 @@ async def list_models(provider: str = ""):
 async def chat(body: ChatRequest):
     messages = _msg_list(body.messages)
     if body.stream:
-        return _sse(_delta_gen(stream_llm(body.provider or "", messages, body.model or "", body.temperature)))
+        return sse_response(_delta_gen(stream_llm(body.provider or "", messages, body.model or "", body.temperature)))
     text = await complete(body.provider or "", messages, body.model or "", body.temperature)
     return {"text": text}
 
@@ -135,7 +135,7 @@ async def generate_note(body: GenerateNoteRequest):
                 return
             yield {"type": "done"}
 
-        return _sse(gen())
+        return sse_response(gen())
 
     text = await complete(body.provider or "", messages, body.model or "")
     result = {"text": text}
@@ -187,7 +187,7 @@ async def ask(body: AskRequest):
                 return
             yield {"type": "done"}
 
-        return _sse(gen())
+        return sse_response(gen())
 
     text = await complete(body.provider or "", messages, body.model or "")
     result: Dict = {"text": text}
@@ -213,7 +213,7 @@ async def tutor_chat(body: TutorChatRequest):
     messages = [{"role": "system", "content": system}] + history
 
     if body.stream:
-        return _sse(_delta_gen(stream_llm(body.provider or "", messages, body.model or "", body.temperature)))
+        return sse_response(_delta_gen(stream_llm(body.provider or "", messages, body.model or "", body.temperature)))
     text = await complete(body.provider or "", messages, body.model or "", body.temperature)
     return {"text": text}
 
@@ -228,3 +228,24 @@ async def study_guide(body: StudyGuideRequest):
         saved = vault.create_note(body.save_path, md, overwrite=False)
         result["saved_path"] = saved["path"]
     return result
+
+
+@router.post("/study-guide/stream")
+async def study_guide_stream(body: StudyGuideRequest):
+    """学习指南流式：SSE 增量输出 Markdown，结束时可选落盘。"""
+    from ..services.exam_service import _guide_messages
+
+    messages = _guide_messages(body.paths, body.language)
+
+    async def gen():
+        buf = []
+        async for delta in stream_llm(body.provider or "", messages, body.model or ""):
+            buf.append(delta)
+            yield {"type": "delta", "text": delta}
+        done: Dict = {"type": "done", "markdown": "".join(buf)}
+        if body.save_path:
+            saved = vault.create_note(body.save_path, done["markdown"], overwrite=False)
+            done["saved_path"] = saved["path"]
+        yield done
+
+    return sse_response(gen())

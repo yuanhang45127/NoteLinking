@@ -85,19 +85,17 @@ def _build_exam_prompt(context: str, types: List[str], count: int, difficulty: s
     ]
 
 
-async def generate_exam(
+def _finalize_exam(
+    raw: str,
     paths: List[str],
+    used_titles: List[str],
     types: List[str],
     count: int,
-    difficulty: str = "medium",
-    language: str = "zh",
-    title: str = "",
-    provider_id: str = "",
-    model: str = "",
+    difficulty: str,
+    language: str,
+    title: str,
 ) -> Dict:
-    context, used_titles = gather_context(paths)
-    messages = _build_exam_prompt(context, types, max(1, min(count, 50)), difficulty, language)
-    raw = await complete(provider_id, messages, model)
+    """把模型输出的原始文本解析为试卷并落盘（流式/非流式共用）。"""
     data = extract_json(raw)
 
     questions = data.get("questions") if isinstance(data, dict) else None
@@ -121,6 +119,30 @@ async def generate_exam(
     f = get_exams_dir() / f"{exam['id']}.json"
     f.write_text(json.dumps(exam, ensure_ascii=False, indent=2), encoding="utf-8")
     return exam
+
+
+def _exam_messages(
+    paths: List[str], types: List[str], count: int, difficulty: str, language: str
+):
+    """构造出卷 prompt，返回 (messages, paths, used_titles)（流式/非流式共用）。"""
+    context, used_titles = gather_context(paths)
+    messages = _build_exam_prompt(context, types, max(1, min(count, 50)), difficulty, language)
+    return messages, used_titles
+
+
+async def generate_exam(
+    paths: List[str],
+    types: List[str],
+    count: int,
+    difficulty: str = "medium",
+    language: str = "zh",
+    title: str = "",
+    provider_id: str = "",
+    model: str = "",
+) -> Dict:
+    messages, used_titles = _exam_messages(paths, types, count, difficulty, language)
+    raw = await complete(provider_id, messages, model)
+    return _finalize_exam(raw, paths, used_titles, types, count, difficulty, language, title)
 
 
 def list_exams() -> List[Dict]:
@@ -259,8 +281,8 @@ def list_attempts(exam_id: str) -> List[Dict]:
     return data.get("attempts", [])
 
 
-async def generate_study_guide(paths: List[str], language: str = "zh", provider_id: str = "", model: str = "") -> str:
-    """NotebookLM 风格学习指南：核心概念、公式、易错点、考点预测、记忆技巧。"""
+def _guide_messages(paths: List[str], language: str = "zh") -> List[Dict[str, str]]:
+    """构造学习指南生成 prompt（流式/非流式共用）。"""
     context, used = gather_context(paths)
     lang = "中文" if language == "zh" else language
     system = "你是学习教练，输出 GitHub 风格 Markdown 学习指南，公式用 LaTeX（$...$ / $$...$$）。"
@@ -276,7 +298,12 @@ async def generate_study_guide(paths: List[str], language: str = "zh", provider_
         "## 记忆技巧\n"
         "## 自测清单（可勾选的检查项，用 - [ ] 列表）"
     )
-    return await complete(provider_id, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+async def generate_study_guide(paths: List[str], language: str = "zh", provider_id: str = "", model: str = "") -> str:
+    """NotebookLM 风格学习指南：核心概念、公式、易错点、考点预测、记忆技巧。"""
+    return await complete(provider_id, _guide_messages(paths, language), model)
 
 
 __all__ = [
@@ -294,8 +321,8 @@ def _checklist_file(topic: str) -> Path:
     return d / f"{sanitize_filename(topic or 'default', 'default')}.json"
 
 
-async def generate_checklist(paths: List[str], language: str = "zh", provider_id: str = "", model: str = "") -> Dict:
-    """基于勾选资料生成考点清单（按重要度排序，可标记掌握情况）。"""
+def _checklist_messages(paths: List[str], language: str = "zh"):
+    """构造考点清单生成 prompt，返回 (messages, used)（流式/非流式共用）。"""
     context, used = gather_context(paths)
     lang = "中文" if language == "zh" else language
     system = "你是命题专家，只输出一个 JSON 对象，不要其他文字或代码围栏。"
@@ -306,7 +333,11 @@ async def generate_checklist(paths: List[str], language: str = "zh", provider_id
         '{"points": [{"point": "考点描述", "importance": "高|中|低", '
         '"suggestion": "一句话复习建议"}]}'
     )
-    raw = await complete(provider_id, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}], used
+
+
+def _finalize_checklist(raw: str, paths: List[str], used: List[str]) -> Dict:
+    """把模型输出的原始文本解析为考点清单并落盘（流式/非流式共用）。"""
     data = extract_json(raw)
     points = data.get("points") if isinstance(data, dict) else None
     if not isinstance(points, list) or not points:
@@ -331,6 +362,13 @@ async def generate_checklist(paths: List[str], language: str = "zh", provider_id
     f = _checklist_file(doc["topic"])
     f.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
     return doc
+
+
+async def generate_checklist(paths: List[str], language: str = "zh", provider_id: str = "", model: str = "") -> Dict:
+    """基于勾选资料生成考点清单（按重要度排序，可标记掌握情况）。"""
+    messages, used = _checklist_messages(paths, language)
+    raw = await complete(provider_id, messages, model)
+    return _finalize_checklist(raw, paths, used)
 
 
 def get_checklist(topic: str) -> Optional[Dict]:

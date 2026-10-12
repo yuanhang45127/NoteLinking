@@ -8,6 +8,7 @@ import { applyHighlights, selectionInfo } from '../lib/highlight'
 import { renderMarkdown, stripFrontAndH1 } from '../lib/md'
 import type { TocItem } from '../lib/md'
 import Modal from './Modal'
+import TermStreamModal from './TermStreamModal'
 import {
   IconBulb, IconConcept, IconEdit, IconFilePdf, IconLink, IconList,
   IconRefresh, IconSpark, IconWand,
@@ -46,6 +47,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
   const [askOpen, setAskOpen] = useState<{ quote: string; prefix: string; suffix: string; text: string; save: boolean; streaming: boolean } | null>(null)
   const [regenOpen, setRegenOpen] = useState(false)
   const [continueOpen, setContinueOpen] = useState(false)
+  const [termGen, setTermGen] = useState<{ term: string; ctxBefore: string; ctxAfter: string; regenerate: boolean } | null>(null)
   const hoverTimer = useRef<number>()
   const hideTimer = useRef<number>()
 
@@ -120,20 +122,14 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     } catch (e: any) { toast(e.message, 'err') }
   }
 
-  const doWhatMean = async (termArg?: string, ctxBefore?: string, ctxAfter?: string) => {
+  const doWhatMean = (termArg?: string, ctxBeforeArg?: string, ctxAfterArg?: string) => {
     const term = (termArg ?? sel?.quote ?? '').trim().slice(0, 40)
     if (!term) return
+    const ctxBefore = (ctxBeforeArg ?? sel?.prefix ?? '').slice(-400)
+    const ctxAfter = (ctxAfterArg ?? sel?.suffix ?? '').slice(0, 400)
     setSel(null)
-    try {
-      toast(`正在为「${term}」生成概念解释...`)
-      const created = await api.createTerm({
-        path: note.path, term,
-        context_before: (ctxBefore ?? sel?.prefix ?? '').slice(-400),
-        context_after: (ctxAfter ?? sel?.suffix ?? '').slice(0, 400),
-      })
-      await reload()
-      onOpenConcept(created.path)
-    } catch (e: any) { toast(e.message, 'err') }
+    // 流式生成：弹窗内增量展示，落盘后由 onDone 打开概念页
+    setTermGen({ term, ctxBefore, ctxAfter, regenerate: false })
   }
 
   const doExplain = () => {
@@ -331,6 +327,19 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
               <button className="btn small" style={{ color: 'var(--err)', marginLeft: 'auto' }} onClick={() => delAnn(annMenu.id)}>删除</button>
             </div>
           </div>
+        )}
+
+        {/* 概念解释流式生成 */}
+        {termGen && (
+          <TermStreamModal
+            path={note.path}
+            term={termGen.term}
+            contextBefore={termGen.ctxBefore}
+            contextAfter={termGen.ctxAfter}
+            regenerate={termGen.regenerate}
+            onClose={() => setTermGen(null)}
+            onDone={(p) => { setTermGen(null); onOpenConcept(p) }}
+          />
         )}
 
         {/* 解释选段 */}
