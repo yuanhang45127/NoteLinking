@@ -149,20 +149,18 @@ PUT /api/settings/providers
 - 模型调用失败统一返回 `502 {"detail": "…"}`
 - 数据目录可用环境变量 `NOTEBOOK_DATA_DIR` 重定向（多开/备份用）
 
-## 公网部署（阿里云 ECS 实测）
+## 公网部署示例（nginx + systemd）
 
 ```bash
 # 服务器 /opt/notelink 目录结构
 #   backend/  frontend/dist  examples  scripts  data/
 # systemd：/etc/systemd/system/notelink.service
-#   Environment=NOTEBOOK_TOKEN=<令牌>
+#   Environment=NOTEBOOK_TOKEN=<你的访问令牌>
 #   Environment=NOTEBOOK_DATA_DIR=/opt/notelink/data
 #   ExecStart=/opt/notelink/backend/.venv/bin/python run.py --host 0.0.0.0 --port 8020
-# nginx：sites-enabled/notelink → 443 (泛域名证书) 反代 127.0.0.1:8020，
+# nginx：sites-enabled/notelink → 443 (证书) 反代 127.0.0.1:8020，
 #        client_max_body_size 60m，proxy_buffering off（SSE 流式必需），
 #        并显式置空 X-Notebook-Trusted 头
-#        sites-enabled/notelink-tailnet → 100.93.24.87:443（仅 tailnet 可路由）
-#        注入 X-Notebook-Trusted 标记头 → 免令牌
-# 访问：公网 https://notelink.obsidianlyh.top（输入令牌进入）
-#       tailnet https://notelink-t.obsidianlyh.top（免令牌）
+#        （可选）内网免令牌入口 → <内网IP>:443，nginx 注入 X-Notebook-Trusted 标记头
+# 访问：公网 https://notebook.example.com（输入令牌进入）
 ```
