@@ -94,7 +94,7 @@ export default function TopBar({ onToggleSidebar }: { onToggleSidebar?: () => vo
 
 /* ---------------- 账号菜单 ---------------- */
 function UserMenu() {
-  const { user } = useApp()
+  const { user, authReady } = useApp()
   const [open, setOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -106,9 +106,9 @@ function UserMenu() {
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
 
-  // 未拿到用户状态（鉴权检查中）不渲染
-  if (!user) return null
-  const isDefault = user === 'default' // 单人开放模式：数据在默认账户
+  // 鉴权检查完成前不渲染；之后一直显示（登录用户=退出入口，开放模式=注册/登录入口）
+  if (!authReady) return null
+  const isDefault = !user || user === 'default' // 单人开放模式：数据在默认账户
   const initial = isDefault ? '·' : (Array.from(user)[0] || '?')
 
   const logout = async () => {
