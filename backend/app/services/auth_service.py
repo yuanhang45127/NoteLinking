@@ -15,8 +15,10 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -29,6 +31,67 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fa5]{2,32}$")
 SESSION_COOKIE = "nl_session"
 SESSION_TTL = 30 * 24 * 3600
 PBKDF2_ROUNDS = 200_000
+
+# ---------------------------------------------------------------- 限流/锁定（内存）
+# 登录防爆破：同一 用户名+IP 连续失败 LOGIN_MAX_FAILS 次锁定 LOGIN_LOCK_SECONDS；
+# 注册防批量：同一 IP 每小时 REGISTER_PER_HOUR 个（邮箱验证之外再加一道）。
+_lock = threading.Lock()
+_login_fails: Dict[str, Dict] = {}   # key -> {fails, locked_until}
+_register_hits: Dict[str, List[float]] = {}  # ip -> [ts]
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_SECONDS = 10 * 60
+REGISTER_PER_HOUR = int(os.environ.get("NOTELINK_REGISTER_PER_HOUR", "5") or 5)
+
+
+def reset_rate_limits() -> None:
+    """清空限流状态（测试用）。"""
+    with _lock:
+        _login_fails.clear()
+        _register_hits.clear()
+
+
+def login_lock_remaining(key: str) -> int:
+    """该 用户名+IP 的登录锁剩余秒数；无锁返回 0。"""
+    with _lock:
+        rec = _login_fails.get(key)
+        if not rec:
+            return 0
+        left = int(rec["locked_until"] - time.time()) + 1
+        return left if left > 0 else 0
+
+
+def record_login_fail(key: str) -> None:
+    with _lock:
+        rec = _login_fails.setdefault(key, {"fails": 0, "locked_until": 0.0})
+        rec["fails"] += 1
+        if rec["fails"] >= LOGIN_MAX_FAILS:
+            rec["locked_until"] = time.time() + LOGIN_LOCK_SECONDS
+
+
+def clear_login_fails(key: str) -> None:
+    with _lock:
+        _login_fails.pop(key, None)
+
+
+def register_allowed(ip: str) -> bool:
+    now = time.time()
+    with _lock:
+        hits = [t for t in _register_hits.get(ip, []) if now - t < 3600]
+        _register_hits[ip] = hits
+        return len(hits) < REGISTER_PER_HOUR
+
+
+def record_register(ip: str) -> None:
+    with _lock:
+        _register_hits.setdefault(ip, []).append(time.time())
+
+
+def client_ip(host: str, x_real_ip: str = "") -> str:
+    """反代（nginx 在本机）时取 X-Real-IP；直连用对端地址。
+    服务只绑回环，经 nginx 的请求 peer 必为 127.0.0.1，可信任该头。"""
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return (x_real_ip or "").strip() or host
+    return host
 
 
 # ---------------------------------------------------------------- 密钥
@@ -241,4 +304,6 @@ __all__ = [
     "create_session_token", "resolve_session_token",
     "session_cookie_header", "SESSION_COOKIE",
     "migrate_legacy_single_user",
+    "reset_rate_limits", "login_lock_remaining", "record_login_fail",
+    "clear_login_fails", "register_allowed", "record_register", "client_ip",
 ]

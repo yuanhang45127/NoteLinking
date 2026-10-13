@@ -100,3 +100,40 @@ def test_register_unchanged_when_disabled(client, send_stub):
     assert client.post("/api/auth/email-code", json={"email": "a@b.com"}).status_code == 400
     r = client.post("/api/auth/register", json={"username": "PlainUser", "password": "pass123"})
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------- 防爆破
+def test_code_five_wrong_attempts_invalidates(client, verify_on, send_stub):
+    mail_service.issue_code("u1@x.com")
+    code = send_stub[0][1]
+    for _ in range(4):
+        assert not mail_service.verify_code("u1@x.com", "000000")
+    assert mail_service.verify_code("u1@x.com", code)  # 4 错后仍可
+    mail_service.issue_code("u1@x.com")
+    for _ in range(5):
+        mail_service.verify_code("u1@x.com", "000000")
+    assert not mail_service.verify_code("u1@x.com", send_stub[1][1])  # 5 错作废
+
+
+def test_login_lockout_after_five_fails(client):
+    client.post("/api/auth/register", json={"username": "alice", "password": "secret1"})
+    for _ in range(5):
+        r = client.post("/api/auth/login", json={"username": "alice", "password": "wrong"})
+        assert r.status_code == 401
+    # 锁定后即使密码正确也 429
+    r = client.post("/api/auth/login", json={"username": "alice", "password": "secret1"})
+    assert r.status_code == 429 and "锁定" in r.json()["detail"]
+    # 清除锁后可正常登录（模拟 10 分钟过去由 record/clear 管理）
+    from app.services import auth_service
+    auth_service.clear_login_fails("alice|testclient")
+    r = client.post("/api/auth/login", json={"username": "alice", "password": "secret1"})
+    assert r.status_code == 200
+
+
+def test_register_per_ip_cap(client, monkeypatch):
+    monkeypatch.setattr("app.services.auth_service.REGISTER_PER_HOUR", 2)
+    for i in range(2):
+        r = client.post("/api/auth/register", json={"username": f"user{i}", "password": "pass123"})
+        assert r.status_code == 200
+    r = client.post("/api/auth/register", json={"username": "user2", "password": "pass123"})
+    assert r.status_code == 429

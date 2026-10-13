@@ -70,7 +70,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
 
   // 弹层
   const [sel, setSel] = useState<{ x: number; y: number; quote: string; prefix: string; suffix: string } | null>(null)
-  const [hover, setHover] = useState<{ x: number; y: number; target: string; kind: 'term' | 'note'; found: boolean; summary: string; path: string } | null>(null)
+  const [hover, setHover] = useState<{ x: number; y: number; up: boolean; target: string; kind: 'term' | 'note'; found: boolean; summary: string; path: string } | null>(null)
   const [annMenu, setAnnMenu] = useState<{ x: number; y: number; id: string; comment: string; quote: string; created_at?: string; mode: 'view' | 'edit' } | null>(null)
   const [regenOpen, setRegenOpen] = useState(false)
   const [continueOpen, setContinueOpen] = useState(false)
@@ -188,7 +188,14 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     hoverTimer.current = window.setTimeout(async () => {
       const rect = a.getBoundingClientRect()
       const wrap = wrapRef.current!.getBoundingClientRect()
-      const pos = { x: rect.left + rect.width / 2 - wrap.left, y: rect.bottom - wrap.top + 8 }
+      // 悬浮卡宽 340px：水平方向钳制在阅读器内，避免溢出被滚动容器裁切/压到侧栏
+      const half = 340 / 2 + 12
+      const x = Math.min(Math.max(rect.left + rect.width / 2 - wrap.left, half), Math.max(half, wrap.width - half))
+      let y = rect.bottom - wrap.top + 8
+      let up = false
+      // 底部空间不足时翻转到链接上方
+      if (y + 220 > wrap.height) { up = true; y = rect.top - wrap.top - 8 }
+      const pos = { x, y, up }
       try {
         const r = await api.resolveTerm(target, note.topic)
         if (r.found) {
@@ -416,7 +423,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
 
         {/* 概念悬浮卡 */}
         {hover && (
-          <div className="hover-card" style={{ left: hover.x, top: hover.y, transform: 'translateX(-50%)' }}
+          <div className="hover-card" style={{ left: hover.x, top: hover.y, transform: `translateX(-50%)${hover.up ? ' translateY(-100%)' : ''}` }}
             onMouseEnter={() => window.clearTimeout(hideTimer.current)}
             onMouseLeave={() => setHover(null)}>
             <div className="hc-head">

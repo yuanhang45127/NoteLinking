@@ -89,7 +89,8 @@ def issue_code(email: str) -> Tuple[Optional[str], Optional[int]]:
 
 
 def verify_code(email: str, code: str) -> bool:
-    """校验验证码（成功即销毁；错误保留允许重试）。"""
+    """校验验证码：对则销毁返回 True；错则累计尝试次数，满 5 次作废（防枚举），
+    过期即失效。"""
     now = time.time()
     with _lock:
         rec = _store.get(email)
@@ -99,6 +100,10 @@ def verify_code(email: str, code: str) -> bool:
         ok = hmac.compare_digest(rec["code"], (code or "").strip())
         if ok:
             _store.pop(email, None)
+        else:
+            rec["attempts"] = rec.get("attempts", 0) + 1
+            if rec["attempts"] >= 5:
+                _store.pop(email, None)
         return ok
 
 
