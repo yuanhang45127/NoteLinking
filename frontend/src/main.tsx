@@ -11,6 +11,7 @@ import GraphPage from './pages/GraphPage'
 import ExamPage from './pages/ExamPage'
 import PapersPage from './pages/PapersPage'
 import SettingsPage from './pages/SettingsPage'
+import GuidePage from './pages/GuidePage'
 
 const router = createHashRouter([
   {
@@ -24,6 +25,7 @@ const router = createHashRouter([
       { path: 'exam', element: <ExamPage /> },
       { path: 'papers', element: <PapersPage /> },
       { path: 'settings', element: <SettingsPage /> },
+      { path: 'guide', element: <GuidePage /> },
     ],
   },
 ])

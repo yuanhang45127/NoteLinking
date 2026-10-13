@@ -50,6 +50,8 @@ export default function TopBar({ onToggleSidebar }: { onToggleSidebar?: () => vo
     const tab = params.get('tab')
     const names: Record<string, string> = { general: '通用', topics: '主题管理', reader: '阅读与高亮', model: 'AI 模型', graph: '双链与图谱', io: '导入与导出' }
     if (tab && names[tab]) parts.push({ label: names[tab], cur: true })
+  } else if (location.pathname.startsWith('/guide')) {
+    parts.push({ label: '新手指引' })
   }
 
   return (

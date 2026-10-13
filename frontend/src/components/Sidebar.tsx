@@ -4,7 +4,7 @@ import { api, getModelOverride, streamUrls } from '../api'
 import { useApp } from '../store'
 import { streamTracked } from '../lib/aiTasks'
 import {
-  IconCaretDown, IconCheck, IconChevron, IconConcept, IconDoc, IconFilePdf, IconFolder,
+  IconBulb, IconCaretDown, IconCheck, IconChevron, IconConcept, IconDoc, IconFilePdf, IconFolder,
   IconFolderOpen, IconGear, IconGraph, IconGrad, IconNote, IconPlus,
 } from './Icons'
 import Modal from './Modal'
@@ -287,6 +287,11 @@ export default function Sidebar() {
       </button>
       <button className={`nav-item ${location.pathname.startsWith('/settings') ? 'active' : ''}`} onClick={() => navigate('/settings')}>
         <IconGear /> 设置
+      </button>
+      <button className={`nav-item ${location.pathname.startsWith('/guide') ? 'active' : ''}`}
+        title="新手引导：八步上手 NoteLink"
+        onClick={() => navigate('/guide')}>
+        <IconBulb /> 新手指引
       </button>
 
       <hr className="side-divider" />

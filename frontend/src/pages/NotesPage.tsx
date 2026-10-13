@@ -59,7 +59,14 @@ export default function NotesPage() {
       </div>
     )
   } else if (!activeTopic) {
-    body = <div className="empty-tip"><div className="big">先在左侧新建或选择一个主题</div></div>
+    body = (
+      <div className="empty-tip">
+        <div className="big">先在左侧新建或选择一个主题</div>
+        <div className="empty-ops">
+          <button className="btn small" onClick={() => navigate('/guide')}>看看新手指引</button>
+        </div>
+      </div>
+    )
   } else if (treeTopic !== activeTopic) {
     // 刚切换主题，目录还在加载：短暂留白，避免误显示“还没有笔记”
     body = null
@@ -67,7 +74,10 @@ export default function NotesPage() {
     body = (
       <div className="empty-tip">
         <div className="big">这个主题还没有笔记</div>
-        <button className="btn primary" onClick={() => openAiGenerate(navigate, activeTopic)}>✦ 用 AI 生成第一篇笔记</button>
+        <div className="empty-ops">
+          <button className="btn primary" onClick={() => openAiGenerate(navigate, activeTopic)}>✦ 用 AI 生成第一篇笔记</button>
+          <button className="btn small" onClick={() => navigate('/guide')}>看看新手指引</button>
+        </div>
       </div>
     )
   } else {

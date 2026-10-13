@@ -5,6 +5,7 @@ import TopBar from './components/TopBar'
 import ChatDock from './components/ChatDock'
 import LoginGate from './components/LoginGate'
 import AiTaskFloat from './components/AiTaskFloat'
+import GuideWelcome from './components/GuideWelcome'
 import { useApp } from './store'
 import { api } from './api'
 import { chatDock } from './components/chat/chatDockSignal'
@@ -76,6 +77,16 @@ export default function App() {
     return () => window.removeEventListener(AUTH_GATE_EVENT, onOpen)
   }, [])
 
+  // 首次进入的欢迎弹窗（记录 nl-guide-seen 后不再自动弹出）
+  const [welcome, setWelcome] = useState(false)
+  useEffect(() => {
+    if (gate === 'ok' && !localStorage.getItem('nl-guide-seen')) setWelcome(true)
+  }, [gate])
+  const closeWelcome = useCallback(() => {
+    localStorage.setItem('nl-guide-seen', '1')
+    setWelcome(false)
+  }, [])
+
   if (gate === 'checking') return null
   if (gate === 'login') {
     return (
@@ -98,6 +109,7 @@ export default function App() {
       </div>
       <ChatDock />
       <AiTaskFloat />
+      {welcome && <GuideWelcome onClose={closeWelcome} />}
       <div className="toast-wrap">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.kind}`}>{t.text}</div>
