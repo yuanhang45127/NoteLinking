@@ -1,25 +1,51 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { LogoMark } from './Icons'
 
-/** 登录 / 注册门：多用户模式下未登录时全屏展示。 */
+/** 登录 / 注册门：多用户模式下未登录时全屏展示。开启邮箱验证时注册需验证码。 */
 export default function LoginGate({ onOk }: { onOk: (username: string) => void }) {
   const [tab, setTab] = useState<'login' | 'register'>('login')
   const [firstUser, setFirstUser] = useState(false) // 还是没人注册（首位注册者可接管旧数据）
+  const [emailVerify, setEmailVerify] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
+  const [email, setEmail] = useState('')
+  const [code, setCode] = useState('')
+  const [cooldown, setCooldown] = useState(0) // 发送验证码倒计时
   const [claim, setClaim] = useState(true)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const t = window.setTimeout(() => setCooldown((c) => c - 1), 1000)
+    return () => window.clearTimeout(t)
+  }, [cooldown])
 
   const probeStatus = (t: 'login' | 'register') => {
     setTab(t)
     setErr('')
     if (t === 'register') {
       api.authStatus()
-        .then((s) => setFirstUser(s.mode === 'open'))
+        .then((s) => { setFirstUser(s.mode === 'open'); setEmailVerify(!!s.email_verify) })
         .catch(() => setFirstUser(false))
+    }
+  }
+
+  const sendCode = async () => {
+    if (cooldown > 0) return
+    const em = email.trim()
+    if (!em) { setErr('请先填写邮箱'); return }
+    setErr('')
+    try {
+      const r = await api.sendEmailCode(em)
+      setCooldown(r.cooldown || 60)
+    } catch (e: any) {
+      const msg = e.message || '发送失败'
+      const m = msg.match(/(\d+)\s*秒/)
+      if (m) setCooldown(Number(m[1]))
+      setErr(msg)
     }
   }
 
@@ -29,11 +55,12 @@ export default function LoginGate({ onOk }: { onOk: (username: string) => void }
     const name = username.trim()
     if (!name || !password) { setErr('请输入用户名和密码'); return }
     if (tab === 'register' && password !== confirm) { setErr('两次输入的密码不一致'); return }
+    if (tab === 'register' && emailVerify && !code.trim()) { setErr('请填写邮箱验证码'); return }
     setBusy(true)
     try {
       const r = tab === 'login'
         ? await api.login(name, password)
-        : await api.register(name, password, claim)
+        : await api.register(name, password, claim, email.trim(), code.trim())
       onOk(r.username)
     } catch (e: any) {
       setErr(e.message || '出错了，请重试')
@@ -84,6 +111,30 @@ export default function LoginGate({ onOk }: { onOk: (username: string) => void }
         />
         {tab === 'register' && (
           <>
+            {emailVerify && (
+              <>
+                <input
+                  className="text-input"
+                  style={{ width: '100%', marginBottom: 10 }}
+                  placeholder="邮箱（用于接收验证码）"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                  <input
+                    className="text-input"
+                    style={{ flex: 1, marginBottom: 0 }}
+                    placeholder="6 位验证码"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && submit()}
+                  />
+                  <button className="btn" style={{ flex: 'none' }} disabled={cooldown > 0} onClick={sendCode}>
+                    {cooldown > 0 ? `${cooldown}s` : '发送验证码'}
+                  </button>
+                </div>
+              </>
+            )}
             <input
               className="text-input"
               style={{ width: '100%' }}

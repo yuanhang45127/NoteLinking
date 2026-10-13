@@ -69,6 +69,7 @@
 
 ### 6. 账号与部署
 - **账号系统**：注册 / 登录 / 会话（HttpOnly Cookie，PBKDF2 口令哈希）；没人注册时为单人开放模式，无需登录；
+- **邮箱验证**（可选）：配置 SMTP（`SMTP_HOST/PORT/USER/PASS/FROM_EMAIL`）并设 `NOTELINK_EMAIL_VERIFY=1` 后，注册必须验证邮箱（6 位验证码，5 分钟有效，60 秒冷却），同一邮箱只能绑定一个账号；
 - **多用户隔离**：每个用户独立的笔记库、标注、试卷、设置与 API Key；
 - **旧数据迁移**：从旧版单人版升级时自动迁移，首位注册者可一键「接管」已有笔记；
 - **访问令牌**（可选）：账号体系之外的第二道门，适合纯内网或过渡场景；
@@ -117,6 +118,8 @@ python scripts/seed_example.py
 | `NOTEBOOK_TOKEN` | 可选访问令牌，设置后所有 API 需携带（`X-Notebook-Token` 头或 `?token=`） |
 | `NOTEBOOK_COOKIE_SECURE` | `1` = 会话 Cookie 加 `Secure` 标记（HTTPS 反代后建议开启） |
 | `NOTEBOOK_CORS_ORIGINS` | 允许的跨域来源，逗号分隔（默认仅 Vite 开发服务器；前端同源托管时无需配置） |
+| `NOTELINK_EMAIL_VERIFY` | `1` = 注册必须邮箱验证（需同时配置下方 SMTP；未配置 SMTP 时保持关闭） |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `FROM_EMAIL` | 注册验证码邮件的 SMTP 配置（如阿里云 DirectMail） |
 | `NOTEBOOK_TRUSTED_MARKER` | 可选内网免令牌标记，配合反代注入 `X-Notebook-Trusted` 头使用 |
 
 更细的公网部署（nginx + HTTPS + systemd）见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。

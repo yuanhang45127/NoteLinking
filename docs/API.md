@@ -14,8 +14,9 @@ Base URL：`http://127.0.0.1:8000`（Swagger UI：`/docs`）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/auth/status` | `{mode: "open"\|"multi", user, users}`；前端据此决定是否弹登录框 |
-| POST | `/api/auth/register` | `{username, password, claim_existing?}` → 200 即登录；400 用户名/密码不合法，409 用户名已存在 |
+| GET | `/api/auth/status` | `{mode: "open"\|"multi", user, users, email_verify}`；前端据此决定是否弹登录框 |
+| POST | `/api/auth/register` | `{username, password, claim_existing?, email?, code?}` → 200 即登录；`email_verify=true` 时 `email+code` 必填（先 `POST /api/auth/email-code` 发码，6 位数字 5 分钟有效，60 秒冷却） |
+| POST | `/api/auth/email-code` | 发送注册验证码到 `{email}`；429=冷却中（60s）或超每小时上限（5 次/邮箱）；邮件服务未配置时 400 |
 | POST | `/api/auth/login` | `{username, password}` → 200 `{username}`；401 用户名或密码不对 |
 | POST | `/api/auth/logout` | 清除会话 Cookie |
 | GET | `/api/health` | 健康检查（免鉴权） |

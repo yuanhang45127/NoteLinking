@@ -209,13 +209,15 @@ export const api = {
 
   // 账号（会话走 HttpOnly Cookie，无需手动携带）
   authStatus: () =>
-    http<{ mode: 'open' | 'multi'; user: string | null; users: number }>('/api/auth/status'),
+    http<{ mode: 'open' | 'multi'; user: string | null; users: number; email_verify?: boolean }>('/api/auth/status'),
   login: (username: string, password: string) =>
     post<{ username: string }>('/api/auth/login', { username, password }),
-  register: (username: string, password: string, claimExisting: boolean) =>
+  register: (username: string, password: string, claimExisting: boolean, email = '', code = '') =>
     post<{ username: string; claimed_existing?: boolean }>('/api/auth/register', {
-      username, password, claim_existing: claimExisting,
+      username, password, claim_existing: claimExisting, email, code,
     }),
+  sendEmailCode: (email: string) =>
+    post<{ sent: boolean; cooldown: number }>('/api/auth/email-code', { email }),
   logout: () => post<unknown>('/api/auth/logout', {}),
 }
 

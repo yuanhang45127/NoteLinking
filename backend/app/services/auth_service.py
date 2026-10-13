@@ -81,7 +81,16 @@ def _hash_password(password: str, salt_hex: str) -> str:
     ).hex()
 
 
-def register_user(username: str, password: str, claim_existing: bool = False) -> Dict:
+def email_taken(email: str) -> bool:
+    """该邮箱是否已被其他账号绑定（注册邮箱验证时防重复绑定）。"""
+    email = (email or "").strip().lower()
+    if not email:
+        return False
+    return any((u.get("email") or "").lower() == email for u in _load_users())
+
+
+def register_user(username: str, password: str, claim_existing: bool = False,
+                  email: str = "") -> Dict:
     """注册新用户。首一个注册者可勾选接管旧版单人数据（users/default）。
 
     返回 {"username": ...}；失败抛 HTTPException。
@@ -118,6 +127,7 @@ def register_user(username: str, password: str, claim_existing: bool = False) ->
             "username": username,
             "salt": salt,
             "hash": _hash_password(password, salt),
+            "email": (email or "").strip(),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
@@ -137,30 +147,41 @@ def verify_user(username: str, password: str) -> bool:
 
 
 # ---------------------------------------------------------------- 会话
+def _b64e(s: str) -> str:
+    return base64.urlsafe_b64encode(s.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _b64d(s: str) -> str:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4)).decode("utf-8")
+
+
 def create_session_token(username: str) -> str:
     exp = int(time.time()) + SESSION_TTL
-    payload = f"{username}.{exp}"
+    user_b64 = _b64e(username)
+    payload = f"{user_b64}.{exp}"
     sig = hmac.new(_secret_key(), payload.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
 
 def resolve_session_token(token: str) -> Optional[str]:
-    """校验会话令牌，返回用户名；无效/过期返回 None。"""
+    """校验会话令牌，返回用户名；无效/过期返回 None。用户名经 base64url 编码，
+    保证 Cookie 值为 ASCII（中文用户名也能正常签发会话）。"""
     if not token or token.count(".") != 2:
         return None
     try:
-        username, exp, sig = token.split(".")
+        user_b64, exp, sig = token.split(".")
+        username = _b64d(user_b64)
         if int(exp) < time.time():
             return None
         expect = hmac.new(
-            _secret_key(), f"{username}.{exp}".encode("utf-8"), hashlib.sha256
+            _secret_key(), f"{user_b64}.{exp}".encode("utf-8"), hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(sig, expect):
             return None
         if username != "default" and username not in list_usernames():
             return None
         return username
-    except (ValueError, IndexError):
+    except (ValueError, IndexError, UnicodeDecodeError):
         return None
 
 
@@ -216,6 +237,7 @@ def _merge_move(src: Path, dst: Path) -> None:
 
 __all__ = [
     "register_user", "verify_user", "users_count", "list_usernames",
+    "email_taken",
     "create_session_token", "resolve_session_token",
     "session_cookie_header", "SESSION_COOKIE",
     "migrate_legacy_single_user",
