@@ -4,6 +4,7 @@ import { api, getModelOverride, setModelOverride } from '../api'
 import { useApp } from '../store'
 import { IconBell, IconChat, IconSearch } from './Icons'
 import { chatDock } from './chat/chatDockSignal'
+import { openAuthGate } from './authGateSignal'
 import type { Provider } from '../types'
 
 export default function TopBar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
@@ -105,9 +106,10 @@ function UserMenu() {
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
 
-  // 单人开放模式（default）不显示账号 UI
-  if (!user || user === 'default') return null
-  const initial = Array.from(user)[0] || '?'
+  // 未拿到用户状态（鉴权检查中）不渲染
+  if (!user) return null
+  const isDefault = user === 'default' // 单人开放模式：数据在默认账户
+  const initial = isDefault ? '·' : (Array.from(user)[0] || '?')
 
   const logout = async () => {
     try { await api.logout() } catch { /* 会话可能已过期 */ }
@@ -117,20 +119,35 @@ function UserMenu() {
   return (
     <div style={{ position: 'relative' }} ref={boxRef}>
       <button
-        className="avatar"
+        className={`avatar ${isDefault ? 'anon' : ''}`}
         style={{ border: 'none', cursor: 'pointer', padding: 0 }}
-        title={`${user} · 账号`}
+        title={isDefault ? '单人开放模式 · 点击注册账号' : `${user} · 账号`}
         onClick={() => setOpen((v) => !v)}
       >
         {initial}
       </button>
       {open && (
         <div className="sel-popover" style={{ right: 0, top: 'calc(100% + 8px)', minWidth: 180 }}>
-          <div className="hint" style={{ marginBottom: 10 }}>
-            <div style={{ fontWeight: 600, color: 'var(--text)', fontSize: 13 }}>{user}</div>
-            <div style={{ marginTop: 2 }}>数据与此账号隔离存储</div>
-          </div>
-          <button className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={logout}>退出登录</button>
+          {isDefault ? (
+            <>
+              <div className="hint" style={{ marginBottom: 10 }}>
+                <div style={{ fontWeight: 600, color: 'var(--text)', fontSize: 13 }}>单人开放模式</div>
+                <div style={{ marginTop: 2 }}>数据存于默认账户；注册后进入多用户隔离</div>
+              </div>
+              <button className="btn primary" style={{ width: '100%', justifyContent: 'center' }}
+                onClick={() => { setOpen(false); openAuthGate() }}>
+                注册 / 登录
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="hint" style={{ marginBottom: 10 }}>
+                <div style={{ fontWeight: 600, color: 'var(--text)', fontSize: 13 }}>{user}</div>
+                <div style={{ marginTop: 2 }}>数据与此账号隔离存储</div>
+              </div>
+              <button className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={logout}>退出登录</button>
+            </>
+          )}
         </div>
       )}
     </div>

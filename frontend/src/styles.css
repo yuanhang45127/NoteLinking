@@ -242,6 +242,8 @@ a { color: inherit; }
   background: var(--primary-weak); color: var(--primary);
   display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px;
 }
+/* 单人开放模式的匿名入口（点击注册 / 登录） */
+.avatar.anon { background: var(--card-bg); color: var(--muted); }
 
 .page-scroll { flex: 1; overflow: auto; }
 

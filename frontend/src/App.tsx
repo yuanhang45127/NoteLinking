@@ -8,6 +8,7 @@ import AiTaskFloat from './components/AiTaskFloat'
 import { useApp } from './store'
 import { api } from './api'
 import { chatDock } from './components/chat/chatDockSignal'
+import { AUTH_GATE_EVENT } from './components/authGateSignal'
 import { LogoMark } from './components/Icons'
 
 type Gate = 'checking' | 'login' | 'token' | 'ok'
@@ -67,6 +68,13 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [navigate])
+
+  // 顶栏「注册 / 登录」入口（单人开放模式）：事件驱动打开认证门
+  useEffect(() => {
+    const onOpen = () => setGate('login')
+    window.addEventListener(AUTH_GATE_EVENT, onOpen)
+    return () => window.removeEventListener(AUTH_GATE_EVENT, onOpen)
+  }, [])
 
   if (gate === 'checking') return null
   if (gate === 'login') {
