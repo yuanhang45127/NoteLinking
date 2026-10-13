@@ -79,3 +79,20 @@ def put_graph(body: dict):
 def put_exam(body: ExamSettingsIn):
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     return mask_settings(update_settings("exam", updates))
+
+
+@router.put("/kimi-web")
+def put_kimi_web(body: dict):
+    allowed = {"enabled", "port"}
+    updates = {k: v for k, v in (body or {}).items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail=f"无有效字段，允许：{', '.join(sorted(allowed))}")
+    if "port" in updates:
+        try:
+            port = int(updates["port"])
+            if not (1 <= port <= 65535):
+                raise ValueError
+            updates["port"] = port
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="port 需为 1-65535 的整数")
+    return mask_settings(update_settings("kimi_web", updates))

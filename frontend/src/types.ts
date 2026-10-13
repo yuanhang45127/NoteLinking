@@ -91,8 +91,18 @@ export interface Settings {
   reader: { selection_menu: boolean; auto_concept: boolean; context_scope: string }
   graph: { default_filter: 'all' | 'note' | 'term'; show_missing: boolean }
   exam: { default_count: number; types: string[]; difficulty: string }
+  /** 侧边对话嵌入本机 Kimi Code Web（kimi web），默认关闭 */
+  kimi_web: { enabled: boolean; port: number }
   language: string
   supported_types?: string[]
+}
+
+/** GET /api/integrations/kimi-web：本机 kimi web 探测结果 */
+export interface KimiWebStatus {
+  enabled: boolean
+  running: boolean
+  url: string
+  token: string
 }
 
 export interface GraphNode {

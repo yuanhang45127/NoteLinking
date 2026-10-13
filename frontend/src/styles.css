@@ -994,6 +994,40 @@ mark.hl-anchor { cursor: pointer; }
   border-top: 1px solid var(--border); background: var(--card-bg);
 }
 
+/* 对话抽屉标签页（AI 对话 / Kimi Code） */
+.dock-tabs {
+  display: inline-flex; gap: 2px; padding: 2px;
+  background: var(--card-bg); border-radius: 9px; flex: none;
+}
+.dock-tabs button {
+  border: 0; background: none; cursor: pointer; border-radius: 7px;
+  font-size: 12.5px; padding: 4px 10px; color: var(--muted);
+}
+.dock-tabs button.cur { background: #fff; color: var(--primary); font-weight: 600; box-shadow: 0 1px 3px rgba(30, 32, 48, 0.12); }
+.dock-tab-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.dock-tab-page > * { flex: 1; min-height: 0; }
+
+/* Kimi Code 嵌入页 */
+.kimi-pane { position: relative; display: flex; flex-direction: column; }
+.kimi-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; }
+.kimi-open-ext {
+  position: absolute; top: 8px; right: 10px; z-index: 5;
+  width: 26px; height: 26px; border-radius: 8px; text-align: center; line-height: 26px;
+  background: var(--card-bg); color: var(--muted); text-decoration: none; font-size: 14px;
+  border: 1px solid var(--border);
+}
+.kimi-open-ext:hover { color: var(--primary); border-color: var(--primary-border); }
+.kimi-pane-hint {
+  height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 24px; text-align: center; color: var(--muted); font-size: 13px;
+}
+.kimi-pane-hint .big { font-size: 15px; font-weight: 600; color: var(--text); }
+.kimi-pane-hint .sub { line-height: 1.7; }
+.kimi-cmd {
+  margin: 4px 0 0; padding: 8px 14px; background: #2b2f3a; color: #e8eaf2;
+  border-radius: 9px; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 /* 批注弹卡（点高亮直接展示） */
 .ann-quote {
   margin-top: 8px; padding: 6px 10px; border-left: 3px solid var(--primary-border);

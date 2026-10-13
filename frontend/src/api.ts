@@ -1,6 +1,6 @@
 // 后端 API 客户端 + SSE 流式工具
 import type {
-  Annotation, ArxivResult, BookMeta, ChatSession, ChatSessionMeta, Checklist, Exam, Goal, GraphData, ImportBookResult, NoteDetail, Paper, PinnedNote, Provider, Settings,
+  Annotation, ArxivResult, BookMeta, ChatSession, ChatSessionMeta, Checklist, Exam, Goal, GraphData, ImportBookResult, KimiWebStatus, NoteDetail, Paper, PinnedNote, Provider, Settings,
   Topic, TreeNode, ZoteroCollection, ZoteroConfig, ZoteroSyncResult,
 } from './types'
 
@@ -202,6 +202,10 @@ export const api = {
   saveHighlight: (highlight: Settings['highlight']) => put<Settings>('/api/settings/highlight', highlight),
   saveReader: (reader: Settings['reader']) => put<Settings>('/api/settings/reader', reader),
   saveGraph: (graph: Settings['graph']) => put<Settings>('/api/settings/graph', graph),
+  saveKimiWeb: (kimi_web: Partial<Settings['kimi_web']>) => put<Settings>('/api/settings/kimi-web', kimi_web),
+
+  // 外部工具集成（本机 Kimi Code Web 探测）
+  kimiWebStatus: () => http<KimiWebStatus>('/api/integrations/kimi-web'),
 
   // 账号（会话走 HttpOnly Cookie，无需手动携带）
   authStatus: () =>

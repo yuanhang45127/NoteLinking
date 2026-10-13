@@ -12,6 +12,7 @@ const TABS = [
   { key: 'reader', label: '阅读与高亮' },
   { key: 'model', label: 'AI 模型' },
   { key: 'graph', label: '双链与图谱' },
+  { key: 'kimi', label: 'Kimi Code' },
   { key: 'io', label: '导入与导出' },
 ]
 
@@ -33,6 +34,7 @@ export default function SettingsPage() {
         {tab === 'reader' && <ReaderPanel />}
         {tab === 'model' && <ModelPanel />}
         {tab === 'graph' && <GraphPanel />}
+        {tab === 'kimi' && <KimiPanel />}
         {tab === 'io' && <IoPanel />}
         {tab === 'general' && <GeneralPanel />}
         {tab === 'topics' && <TopicsPanel />}
@@ -368,6 +370,56 @@ function GraphPanel() {
         <Toggle checked={g.show_missing} onChange={(v) => { setG({ ...g, show_missing: v }); setDirty(true) }} />
       </div>
       <SaveBar dirty={dirty} onSave={save} />
+    </div>
+  )
+}
+
+/* ---------------- Kimi Code Web 嵌入 ---------------- */
+function KimiPanel() {
+  const { settings, refreshSettings, toast } = useApp()
+  const [kw, setKw] = useState<Settings['kimi_web']>({ enabled: false, port: 58627 })
+  const [dirty, setDirty] = useState(false)
+  const [status, setStatus] = useState<string>('')
+  useEffect(() => { if (settings) setKw(settings.kimi_web || { enabled: false, port: 58627 }) }, [settings])
+
+  const save = async () => {
+    try { await api.saveKimiWeb(kw); await refreshSettings(); setDirty(false); toast('已保存') }
+    catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const probe = async () => {
+    setStatus('检测中…')
+    try {
+      const r = await api.kimiWebStatus()
+      setStatus(r.running ? `已连接：${r.url}` : '未检测到 kimi web 服务')
+    } catch (e: any) { setStatus(`检测失败：${e.message}`) }
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>Kimi Code 集成</h3>
+      <div className="desc">
+        在右侧 AI 对话抽屉里嵌入本机 <code>kimi web</code> 服务：直接用 Kimi Code 的完整 Agent（检索、文件、MCP 工具）
+        操作笔记库。启动：<code>kimi web --no-open --port 58627</code>（建议先 cd 到笔记库目录）。
+      </div>
+      <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div>
+          <div className="sl-text">启用嵌入</div>
+          <div className="sl-sub">开启后侧边对话出现「Kimi Code」标签；仅建议单人本地部署——任何能登录本服务的人都会获得本机 Kimi Code 的访问</div>
+        </div>
+        <Toggle checked={kw.enabled} onChange={(v) => { setKw({ ...kw, enabled: v }); setDirty(true) }} />
+      </div>
+      <div className="setting-line">
+        <div>
+          <div className="sl-text">kimi web 端口</div>
+          <div className="sl-sub">默认 58627；端口被占用时 kimi web 自动 +1，NoteLink 会依次探测</div>
+        </div>
+        <input className="text-input" style={{ width: 110 }} type="number" value={kw.port}
+          onChange={(e) => { setKw({ ...kw, port: Number(e.target.value) || 58627 }); setDirty(true) }} />
+      </div>
+      {status && <div className="rail-note" style={{ marginTop: 6 }}>{status}</div>}
+      <SaveBar dirty={dirty} onSave={save} />
+      <button className="btn small" style={{ marginLeft: 8 }} onClick={probe}>检测连接</button>
     </div>
   )
 }

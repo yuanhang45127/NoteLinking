@@ -28,6 +28,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "types": ["mcq", "short", "flashcard"],
         "difficulty": "medium",
     },
+    # 侧边 AI 对话嵌入本机 Kimi Code Web（kimi web）：默认关闭（开启后登录者
+    # 可获得本机 kimi web 访问，仅建议单人本地部署打开）
+    "kimi_web": {"enabled": False, "port": 58627},
     "language": "zh",
 }
 

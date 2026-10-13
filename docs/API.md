@@ -123,6 +123,13 @@ Base URL：`http://127.0.0.1:8000`（Swagger UI：`/docs`）
 | PUT | `/api/settings/reader` | `{selection_menu, auto_concept, context_scope}`（划选菜单 / 自动概念文档 / 上下文范围） |
 | PUT | `/api/settings/graph` | `{default_filter, show_missing}` |
 | PUT | `/api/settings/exam` | `{default_count, types, difficulty}` |
+| PUT | `/api/settings/kimi-web` | `{enabled, port}`：侧边对话嵌入本机 Kimi Code Web（默认关闭，多用户部署慎开） |
+
+## 外部工具集成
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/integrations/kimi-web` | 探测本机 `kimi web`：`{enabled, running, url, token}`；token 仅在服务在线时返回（读 `~/.kimi-code/server.token`） |
 
 服务商类型 `type` 三选一，覆盖所有主流模型：
 

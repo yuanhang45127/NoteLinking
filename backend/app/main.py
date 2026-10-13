@@ -26,6 +26,7 @@ from .routers import (
     exams,
     graph,
     importer,
+    integrations,
     llm,
     misc,
     notes,
@@ -146,6 +147,7 @@ app.include_router(graph.router)
 app.include_router(exams.router)
 app.include_router(importer.router)
 app.include_router(settings.router)
+app.include_router(integrations.router)
 app.include_router(misc.router)
 
 
