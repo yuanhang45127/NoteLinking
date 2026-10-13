@@ -122,13 +122,17 @@ def fetch_pdf_url(paper_id: str, topic: str) -> str:
 
 @router.get("/{paper_id}/pdf")
 def paper_pdf(topic: str = Query(...), paper_id: str = ""):
-    """返回已下载的 PDF 附件文件流。"""
+    """返回已下载的 PDF 附件文件流（inline，供阅读页内嵌分栏展示）。"""
     p = papers_store.get_paper(topic, paper_id)
     name = p.get("pdf_path") or (zotero_service.pdf_filename(p["arxiv_id"]) if p.get("arxiv_id") else "")
     f = zotero_service.pdf_dir() / name if name else None
     if not f or not f.exists():
         raise HTTPException(status_code=404, detail="PDF 尚未下载")
-    return FileResponse(f, media_type="application/pdf", filename=f.name)
+    quoted = urllib.parse.quote(f.name)
+    return FileResponse(
+        f, media_type="application/pdf",
+        headers={"Content-Disposition": f"inline; filename*=utf-8''{quoted}"},
+    )
 
 
 @router.post("/{paper_id}/import-text")

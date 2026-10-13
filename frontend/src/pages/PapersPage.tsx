@@ -78,6 +78,14 @@ export default function PapersPage() {
     if (!activeTopic) return
     setNoteBusy(p.id)
     try {
+      // PDF 附件先就位（失败不阻塞笔记生成，只是笔记里不给内嵌入口）
+      let pdfAttached = !!p.pdf_path
+      if (!pdfAttached && p.arxiv_id) {
+        try {
+          await api.fetchPaperPdf(p.topic || activeTopic, p.id)
+          pdfAttached = true
+        } catch (e: any) { toast(`PDF 下载失败，笔记仍会生成：${e.message}`, 'err') }
+      }
       const authors = p.authors.slice(0, 3).join(', ') + (p.authors.length > 3 ? ' 等' : '')
       const prompt = (
         `请根据以下论文信息撰写一篇中文「文献阅读笔记」，包括：研究问题与动机、方法概要、主要贡献、` +
@@ -87,15 +95,31 @@ export default function PapersPage() {
         `链接：${p.url}\n\n摘要：${p.abstract}`
       )
       const safeName = p.title.replace(/[\\/:*?"<>|]/g, ' ').trim().slice(0, 60)
-      const saved = await api.generateNote({
-        topic: activeTopic,
-        prompt,
-        title: `文献笔记 · ${safeName}`,
-        save_path: `${activeTopic}/文献/${safeName}.md`,
-      })
-      toast('阅读笔记已生成')
+      const title = `文献笔记 · ${safeName}`
+      const { text } = await api.generateNote({ topic: activeTopic, prompt, title })
+      // 组装落盘内容：置顶 + 论文关联写进 frontmatter，原文链接固定放正文开头
+      const pdfUrl = `/api/papers/${encodeURIComponent(p.id)}/pdf?topic=${encodeURIComponent(p.topic || activeTopic)}`
+      const yq = (s: string) => `'${s.replace(/'/g, "''")}'`
+      const fm = [
+        '---',
+        `title: ${yq(title)}`,
+        'generated: true',
+        `created: '${new Date().toISOString().slice(0, 10)}'`,
+        'pinned: true',
+        `paper_id: ${p.id}`,
+        `paper_topic: ${p.topic || activeTopic}`,
+        `pdf_attached: ${pdfAttached}`,
+        '---',
+      ].join('\n')
+      const meta =
+        `> 🔗 [arXiv 页面](${p.url})` +
+        (pdfAttached ? ` · 📄 [PDF 原文](${pdfUrl})（阅读页内可分栏对照）` : '') +
+        '\n'
+      const body = text.replace(/^#\s+[^\n]*\n+/, '') // 去掉模型自带的重复大标题
+      const saved = await api.createNote(`${activeTopic}/文献/${safeName}.md`, `${fm}\n# ${title}\n\n${meta}\n${body.trim()}\n`)
+      toast(pdfAttached ? '阅读笔记已生成，已置顶（附 PDF 原文）' : '阅读笔记已生成，已置顶')
       refreshTree()
-      if (saved.saved_path) navigate(`/notes?path=${encodeURIComponent(saved.saved_path)}`)
+      if (saved.path) navigate(`/notes?path=${encodeURIComponent(saved.path)}`)
     } catch (e: any) { toast(e.message, 'err') }
     finally { setNoteBusy('') }
   }

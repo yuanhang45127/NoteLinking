@@ -4,7 +4,7 @@ import { api } from '../api'
 import { useApp } from '../store'
 import type { Provider, Settings } from '../types'
 import Modal from '../components/Modal'
-import { IconDownload, IconFilePdf, IconPlus, IconTrash } from '../components/Icons'
+import { IconDownload, IconEdit, IconFilePdf, IconPlus, IconTrash } from '../components/Icons'
 
 const TABS = [
   { key: 'general', label: '通用' },
@@ -127,7 +127,7 @@ function ReaderPanel() {
         <h3>选段提问与概念文档</h3>
         <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
           <div>
-            <div className="sl-text">选中文字时弹出提问菜单（什么意思 / 解释选段 / 高亮）</div>
+            <div className="sl-text">选中文字时弹出菜单（什么意思 / 高亮）</div>
           </div>
           <Toggle checked={reader.selection_menu} onChange={(v) => update({ selection_menu: v }, 'rd')} />
         </div>
@@ -462,6 +462,22 @@ function TopicsPanel() {
     finally { setBusy('') }
   }
 
+  const rename = async (name: string) => {
+    const input = window.prompt('重命名主题为：', name)
+    if (!input) return
+    const clean = input.trim().replace(/[\\/:*?"<>|]/g, ' ').trim()
+    if (!clean || clean === name) return
+    setBusy(name)
+    try {
+      await api.renameTopic(name, clean)
+      toast(`已改名「${name}」→「${clean}」`)
+      if (activeTopic === name) setActiveTopic(clean)
+      await refreshTopics()
+      refreshTree()
+    } catch (e: any) { toast(e.message, 'err') }
+    finally { setBusy('') }
+  }
+
   return (
     <div className="settings-card">
       <h3>主题管理</h3>
@@ -477,10 +493,16 @@ function TopicsPanel() {
             </div>
             <div className="sl-sub">{t.note_count} 篇内容</div>
           </div>
-          <button className="btn small danger" disabled={busy === t.name}
-            onClick={() => remove(t.name, t.note_count)}>
-            <IconTrash size={14} /> 删除
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn small" disabled={busy === t.name}
+              onClick={() => rename(t.name)}>
+              <IconEdit size={14} /> 改名
+            </button>
+            <button className="btn small danger" disabled={busy === t.name}
+              onClick={() => remove(t.name, t.note_count)}>
+              <IconTrash size={14} /> 删除
+            </button>
+          </div>
         </div>
       ))}
       {!topics.length && <div className="sl-sub">还没有主题。</div>}

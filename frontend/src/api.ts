@@ -1,6 +1,6 @@
 // 后端 API 客户端 + SSE 流式工具
 import type {
-  Annotation, ArxivResult, Checklist, Exam, Goal, GraphData, NoteDetail, Paper, Provider, Settings,
+  Annotation, ArxivResult, Checklist, Exam, Goal, GraphData, NoteDetail, Paper, PinnedNote, Provider, Settings,
   Topic, TreeNode, ZoteroCollection, ZoteroConfig, ZoteroSyncResult,
 } from './types'
 
@@ -27,6 +27,8 @@ const post = <T>(url: string, body: unknown) =>
   http<T>(url, { method: 'POST', body: JSON.stringify(body) })
 const put = <T>(url: string, body: unknown) =>
   http<T>(url, { method: 'PUT', body: JSON.stringify(body) })
+const patch = <T>(url: string, body: unknown) =>
+  http<T>(url, { method: 'PATCH', body: JSON.stringify(body) })
 const del = <T>(url: string) => http<T>(url, { method: 'DELETE' })
 const qs = (params: Record<string, string | number | undefined>) => {
   const u = new URLSearchParams()
@@ -38,6 +40,8 @@ export const api = {
   // 主题 / 树
   topics: () => http<{ topics: Topic[] }>('/api/topics'),
   createTopic: (name: string) => post<Topic>('/api/topics', { name }),
+  renameTopic: (name: string, newName: string) =>
+    patch<Topic>(`/api/topics/${encodeURIComponent(name)}`, { name: newName }),
   setTopicEmoji: (name: string, emoji: string) =>
     put<{ name: string; emoji: string }>(`/api/topics/${encodeURIComponent(name)}/emoji`, { emoji }),
   deleteTopic: (name: string, recursive = false) =>
@@ -79,6 +83,9 @@ export const api = {
   note: (path: string) => http<NoteDetail>(`/api/notes?${qs({ path })}`),
   createNote: (path: string, content = '') => post<NoteDetail>('/api/notes', { path, content }),
   saveNote: (path: string, content: string) => put<NoteDetail>('/api/notes', { path, content }),
+  pinned: () => http<{ pinned: PinnedNote[] }>('/api/pinned'),
+  setNotePin: (path: string, pinned: boolean) => post<NoteDetail>('/api/notes/pin', { path, pinned }),
+  setNoteFinish: (path: string, finished: boolean) => post<NoteDetail>('/api/notes/finish', { path, finished }),
   deleteNote: (path: string) => del<unknown>(`/api/notes?${qs({ path })}`),
   moveNote: (src: string, dst: string) => post<NoteDetail>('/api/notes/move', { src, dst }),
   batchNotes: (action: 'delete' | 'move', paths: string[], target?: string) =>
@@ -247,7 +254,6 @@ export function setModelOverride(provider: string, model: string) {
 export const llmUrls = {
   chat: '/api/llm/chat',
   generateNote: '/api/llm/generate-note',
-  ask: '/api/llm/ask',
   tutorChat: '/api/llm/tutor-chat',
 }
 

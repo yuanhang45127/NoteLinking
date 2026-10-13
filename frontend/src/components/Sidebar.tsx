@@ -8,7 +8,7 @@ import {
 } from './Icons'
 import Modal from './Modal'
 import StreamMd from './StreamMd'
-import type { TreeNode } from '../types'
+import type { PinnedNote, TreeNode } from '../types'
 
 const EMOJI_CHOICES = [
   '📚', '📖', '📝', '✏️', '🧮', '🔢', '🧠', '💡',
@@ -32,8 +32,10 @@ export default function Sidebar() {
   const [selectMode, setSelectMode] = useState(false)
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [moving, setMoving] = useState(false)
+  // 置顶笔记（跨主题，显示在目录树上方；置顶的笔记不再出现在主题树里）
+  const [pinned, setPinned] = useState<PinnedNote[]>([])
   // 单行 ⋮ 菜单
-  const [rowMenu, setRowMenu] = useState<{ path: string; name: string; isTerm: boolean; x: number; y: number } | null>(null)
+  const [rowMenu, setRowMenu] = useState<{ path: string; name: string; isTerm: boolean; pinned: boolean; finished: boolean; x: number; y: number } | null>(null)
   // 按架构批量生成笔记
   const [genNotes, setGenNotes] = useState<{ topic: string; savePath: string } | null>(null)
   const location = useLocation()
@@ -65,6 +67,26 @@ export default function Sidebar() {
     return () => document.removeEventListener('mousedown', close)
   }, [rowMenu])
 
+  // 置顶列表跟随目录树刷新（生成/移动/删除笔记后都会 refreshTree）
+  useEffect(() => {
+    api.pinned().then((r) => setPinned(r.pinned)).catch(() => {})
+  }, [tree])
+  const pinnedPaths = useMemo(() => new Set(pinned.map((p) => p.path)), [pinned])
+  // 已看完的笔记路径（树 + 置顶区都可能有）
+  const finishedPaths = useMemo(() => {
+    const s = new Set<string>()
+    const walk = (n: TreeNode | null) => {
+      if (!n?.children) return
+      for (const c of n.children) {
+        if (c.type === 'dir') walk(c)
+        else if (c.finished) s.add(c.path)
+      }
+    }
+    walk(tree)
+    for (const p of pinned) if (p.finished) s.add(p.path)
+    return s
+  }, [tree, pinned])
+
   // 图标选择面板（锚定在主题按钮下方）：点面板外自动关闭
   const emojiPopRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -75,6 +97,24 @@ export default function Sidebar() {
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [emojiFor])
+
+  // 新建主题输入态：点到别处或按 Esc 自动还原成「新建主题」按钮
+  const createRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!creating) return
+    const onDoc = (e: MouseEvent) => {
+      if (!createRef.current?.contains(e.target as Node)) { setCreating(false); setNewTopic('') }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setCreating(false); setNewTopic('') }
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [creating])
 
   const toggleCheck = (path: string) => {
     setChecked((s) => {
@@ -90,12 +130,32 @@ export default function Sidebar() {
     if (currentPath && deleted.includes(currentPath)) navigate('/notes')
   }
 
-  const openRowMenu = (path: string, name: string, isTerm: boolean, e: React.MouseEvent) => {
+  const openRowMenu = (path: string, name: string, isTerm: boolean, finished: boolean, e: React.MouseEvent) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     // 钳制在视口内：靠下的笔记菜单不溢出屏幕底部
     const x = Math.min(Math.max(8, rect.right - 150), window.innerWidth - 148)
-    const y = Math.min(rect.bottom + 4, window.innerHeight - 100)
-    setRowMenu({ path, name, isTerm, x, y })
+    const y = Math.min(rect.bottom + 4, window.innerHeight - 150)
+    setRowMenu({ path, name, isTerm, pinned: pinnedPaths.has(path), finished, x, y })
+  }
+
+  const togglePin = async (path: string) => {
+    const next = !pinnedPaths.has(path)
+    try {
+      await api.setNotePin(path, next)
+      setRowMenu(null)
+      toast(next ? '已置顶，显示在目录顶部' : '已取消置顶')
+      await refreshTree()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const toggleFinish = async (path: string) => {
+    const cur = finishedPaths.has(path)
+    try {
+      await api.setNoteFinish(path, !cur)
+      setRowMenu(null)
+      toast(!cur ? '已标记看完 ✓' : '已取消「看完」标记')
+      await refreshTree()
+    } catch (e: any) { toast(e.message, 'err') }
   }
 
   const renameNote = async (path: string, name: string) => {
@@ -293,6 +353,28 @@ export default function Sidebar() {
       </div>
 
       <div className="tree">
+        {!!pinned.length && (
+          <div className="pin-section">
+            <div className="pin-label">📌 置顶</div>
+            {pinned.map((n) => (
+              <div key={n.path} className={`tree-row-wrap ${currentPath === n.path ? 'active' : ''}`}>
+                <button className={`tree-row ${n.finished ? 'finished' : ''}`} title={n.path}
+                  onClick={() => navigate(`${n.type === 'term' ? '/concept' : '/notes'}?path=${encodeURIComponent(n.path)}`)}>
+                  <span className={n.type === 'term' ? 'icon-concept' : 'icon-note'}>
+                    {n.type === 'term' ? <IconConcept size={15} /> : <IconDoc size={15} />}
+                  </span>
+                  <span className="name">{n.title || n.name}</span>
+                  {n.finished && <span className="finished-mark" title="已看完">✅</span>}
+                  {n.topic !== activeTopic && <span className="pin-topic">{n.topic}</span>}
+                </button>
+                <button className="row-menu" title="更多操作"
+                  onClick={(e) => { e.stopPropagation(); openRowMenu(n.path, n.name, n.type === 'term', !!n.finished, e) }}>
+                  ⋮
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {activeTopic && (
           <TreeFolder
             node={tree}
@@ -304,6 +386,7 @@ export default function Sidebar() {
             onCheck={toggleCheck}
             onMenu={openRowMenu}
             onDropNote={selectMode ? undefined : dropNoteInto}
+            hidePaths={pinnedPaths}
           />
         )}
         {!activeTopic && <div className="side-hint">创建主题后，这里会显示对应主题的文件目录。</div>}
@@ -346,7 +429,7 @@ export default function Sidebar() {
         <div className="side-hint">图谱由双链自动生成，随笔记与概念文档实时更新。</div>
       )}
 
-      <div className="side-footer">
+      <div className="side-footer" ref={createRef}>
         {!creating ? (
           <button className="quick-item" onClick={() => { setCreating(true); setNewTopic('') }}>
             <IconPlus size={16} /> 新建主题
@@ -376,6 +459,12 @@ export default function Sidebar() {
         <div className="row-menu-pop" style={{ left: rowMenu.x, top: rowMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => togglePin(rowMenu.path)}>
+            {rowMenu.pinned ? '📍 取消置顶' : '📌 置顶'}
+          </button>
+          <button onClick={() => toggleFinish(rowMenu.path)}>
+            {rowMenu.finished ? '↩️ 取消看完' : '✅ 标记看完'}
+          </button>
           <button onClick={() => renameNote(rowMenu.path, rowMenu.name)}>✏️ 重命名</button>
           <button className="danger" onClick={() => deleteNote(rowMenu.path, rowMenu.name)}>🗑 删除</button>
         </div>
@@ -384,7 +473,7 @@ export default function Sidebar() {
   )
 }
 
-function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCheck, onMenu, onDropNote }: {
+function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCheck, onMenu, onDropNote, hidePaths }: {
   node: TreeNode | null
   topic: string
   currentPath: string
@@ -392,8 +481,9 @@ function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCh
   selectMode: boolean
   checked: Set<string>
   onCheck: (path: string) => void
-  onMenu: (path: string, name: string, isTerm: boolean, e: React.MouseEvent) => void
+  onMenu: (path: string, name: string, isTerm: boolean, finished: boolean, e: React.MouseEvent) => void
   onDropNote?: (src: string, dstDir: string) => void
+  hidePaths?: Set<string>
 }) {
   const [dropping, setDropping] = useState(false)
   const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => {
@@ -407,16 +497,19 @@ function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCh
     })
   }
   const renderChildren = (children: TreeNode[]) =>
-    children.map((child) =>
-      child.type === 'dir' ? (
-        <TreeFolder key={child.path} node={child} topic={topic} currentPath={currentPath} depth={depth + 1}
-          selectMode={selectMode} checked={checked} onCheck={onCheck} onMenu={onMenu} onDropNote={onDropNote} />
-      ) : (
-        <TreeLeaf key={child.path} node={child} currentPath={currentPath}
-          selectMode={selectMode} checked={checked.has(child.path)} onCheck={onCheck} onMenu={onMenu}
-          canDrag={!!onDropNote} />
-      ),
-    )
+    children
+      .filter((child) => child.type === 'dir' || !hidePaths?.has(child.path)) // 置顶笔记只在顶部「置顶」区显示
+      .map((child) =>
+        child.type === 'dir' ? (
+          <TreeFolder key={child.path} node={child} topic={topic} currentPath={currentPath} depth={depth + 1}
+            selectMode={selectMode} checked={checked} onCheck={onCheck} onMenu={onMenu} onDropNote={onDropNote}
+            hidePaths={hidePaths} />
+        ) : (
+          <TreeLeaf key={child.path} node={child} currentPath={currentPath}
+            selectMode={selectMode} checked={checked.has(child.path)} onCheck={onCheck} onMenu={onMenu}
+            canDrag={!!onDropNote} />
+        ),
+      )
 
   if (depth === 0) {
     return <>{node?.children ? renderChildren(node.children) : null}</>
@@ -456,7 +549,7 @@ function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu, can
   selectMode: boolean
   checked: boolean
   onCheck: (path: string) => void
-  onMenu: (path: string, name: string, isTerm: boolean, e: React.MouseEvent) => void
+  onMenu: (path: string, name: string, isTerm: boolean, finished: boolean, e: React.MouseEvent) => void
   canDrag?: boolean
 }) {
   const navigate = useNavigate()
@@ -492,15 +585,16 @@ function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu, can
         e.dataTransfer.setData('text/plain', node.path)
         e.dataTransfer.effectAllowed = 'move'
       }}>
-      <button className="tree-row" onClick={open} title={node.path}>
+      <button className={`tree-row ${node.finished ? 'finished' : ''}`} onClick={open} title={node.path}>
         {isTerm
           ? <span className="icon-concept"><IconConcept size={15} /></span>
           : <span className="icon-note"><IconDoc size={15} /></span>}
         <span className="name">{node.name}{!isTerm && <span className="ext">.md</span>}</span>
+        {node.finished && <span className="finished-mark" title="已看完">✅</span>}
         {isTerm && <span className="kind-tag">概念</span>}
       </button>
       <button className="row-menu" title="更多操作"
-        onClick={(e) => { e.stopPropagation(); onMenu(node.path, node.name.replace(/\.md$/i, ''), isTerm, e) }}>
+        onClick={(e) => { e.stopPropagation(); onMenu(node.path, node.name.replace(/\.md$/i, ''), isTerm, !!node.finished, e) }}>
         ⋮
       </button>
     </div>

@@ -34,6 +34,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
   onRegen?: () => void | Promise<void>
 }) {
   const navigate = useNavigate()
+  const { refreshTree } = useApp()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(note.content)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -41,11 +42,28 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
   const [toc, setToc] = useState<TocItem[]>([])
   const [curHeading, setCurHeading] = useState('')
 
+  // 文献笔记：frontmatter 带 paper_id + pdf_attached 时可分栏展示论文 PDF 原文
+  const fm = note.frontmatter || {}
+  const hasPdf = !!fm.paper_id && fm.pdf_attached !== undefined && fm.pdf_attached !== false
+  const pdfUrl = hasPdf
+    ? `/api/papers/${encodeURIComponent(fm.paper_id)}/pdf?topic=${encodeURIComponent(fm.paper_topic || note.topic)}`
+    : ''
+  const [pdfOpen, setPdfOpen] = useState(hasPdf)
+  // 「看完」标记（frontmatter finished）
+  const isFinished = !!(note.frontmatter && note.frontmatter.finished)
+  const toggleFinished = async () => {
+    try {
+      await api.setNoteFinish(note.path, !isFinished)
+      toast(isFinished ? '已取消「看完」标记' : '已标记看完 ✓')
+      await reload()
+      refreshTree() // 同步侧边栏 ✅ 与置顶区状态
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
   // 弹层
   const [sel, setSel] = useState<{ x: number; y: number; quote: string; prefix: string; suffix: string } | null>(null)
   const [hover, setHover] = useState<{ x: number; y: number; target: string; found: boolean; summary: string; path: string } | null>(null)
   const [annMenu, setAnnMenu] = useState<{ x: number; y: number; id: string; comment: string } | null>(null)
-  const [askOpen, setAskOpen] = useState<{ quote: string; prefix: string; suffix: string; text: string; save: boolean; streaming: boolean } | null>(null)
   const [regenOpen, setRegenOpen] = useState(false)
   const [continueOpen, setContinueOpen] = useState(false)
   const [termGen, setTermGen] = useState<{ term: string; ctxBefore: string; ctxAfter: string; regenerate: boolean } | null>(null)
@@ -53,6 +71,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
   const hideTimer = useRef<number>()
 
   useEffect(() => { setDraft(note.content); setEditing(false) }, [note.path, note.content])
+  useEffect(() => { setPdfOpen(hasPdf) }, [note.path, hasPdf]) // 切换笔记时重置 PDF 面板
 
   /* ---------- 渲染 markdown + 自动概念链接 + 高亮 ---------- */
   const conceptNames = useMemo(
@@ -132,19 +151,6 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     setSel(null)
     // 流式生成：弹窗内增量展示，落盘后由 onDone 打开概念页
     setTermGen({ term, ctxBefore, ctxAfter, regenerate: false })
-  }
-
-  const doExplain = () => {
-    if (!sel) return
-    setAskOpen({ quote: sel.quote, prefix: sel.prefix.slice(-600), suffix: sel.suffix.slice(0, 600), text: '', save: false, streaming: true })
-    setSel(null)
-    streamSSE(llmUrls.ask, {
-      path: note.path, selected_text: sel.quote, question: '',
-      context_before: sel.prefix.slice(-600), context_after: sel.suffix.slice(0, 600),
-      stream: true, save_to_note: false, ...getModelOverride(),
-    }, (t) => setAskOpen((s) => (s ? { ...s, text: s.text + t, streaming: true } : s)),
-      (evt) => setAskOpen((s) => (s ? { ...s, streaming: false } : s)),
-      (msg) => { setAskOpen((s) => (s ? { ...s, streaming: false } : s)); toast(msg, 'err') })
   }
 
   /* ---------- 概念悬浮卡 ---------- */
@@ -228,7 +234,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
   const styleLabel = (s: string) => (s === 'font' ? '字体高亮' : '背景高亮')
 
   return (
-    <div className="page-with-rail">
+    <div className={`page-with-rail ${pdfOpen && hasPdf ? 'with-pdf' : ''}`}>
       <div className="reader" ref={wrapRef} style={{ position: 'relative' }}>
         {header}
         {/* 头部 */}
@@ -238,10 +244,22 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
             <div className="note-meta">
               {note.frontmatter.generated && <span className="ai-badge"><IconSpark size={14} /> AI 生成</span>}
               {note.type === 'term' && <span className="tag">概念解释</span>}
+              {isFinished && <span className="tag finish-badge">✅ 已看完</span>}
               <span>更新于 {note.updated_at.replace('T', ' ')}</span>
               {!!note.backlinks.length && <span>· 被 {note.backlinks.length} 篇笔记引用</span>}
             </div>
             <div className="note-actions">
+              <button className={`btn ${isFinished ? 'done' : ''}`}
+                title={isFinished ? '点击取消「已看完」标记' : '这篇笔记看完了，标记一下'}
+                onClick={toggleFinished}>
+                {isFinished ? '✅ 已看完' : '标记看完'}
+              </button>
+              {hasPdf && (
+                <button className="btn" title="分栏展示论文 PDF 原文，与笔记对照阅读"
+                  onClick={() => setPdfOpen((v) => !v)}>
+                  <IconFilePdf size={15} /> {pdfOpen ? '收起原文' : 'PDF 原文'}
+                </button>
+              )}
               <button className="btn" onClick={() => (onRegen ? onRegen() : setRegenOpen(true))}>
                 <IconRefresh size={15} /> 重新生成
               </button>
@@ -279,7 +297,6 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
             <div className="hint">已选中 {sel.quote.length} 个字 · 上下文将一并发送给 AI</div>
             <div className="btns">
               <button className="btn primary" onClick={() => doWhatMean()}>什么意思</button>
-              <button className="btn" onClick={doExplain}>解释选段</button>
               <button className="btn" onClick={doHighlight}>高亮</button>
             </div>
           </div>
@@ -344,36 +361,6 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
           />
         )}
 
-        {/* 解释选段 */}
-        {askOpen && (
-          <Modal title="解释选段" onClose={() => setAskOpen(null)} wide
-            ops={
-              <>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--muted)', marginRight: 'auto' }}>
-                  <input type="checkbox" checked={askOpen.save} disabled={askOpen.streaming}
-                    onChange={(e) => setAskOpen({ ...askOpen, save: e.target.checked })} />
-                  回答后把问答追加到笔记末尾
-                </label>
-                <button className="btn" onClick={() => setAskOpen(null)}>关闭</button>
-                {!askOpen.streaming && askOpen.save && (
-                  <button className="btn primary" onClick={async () => {
-                    try {
-                      await api.saveNote(note.path, `${note.content}\n\n## 问答记录\n\n**问：** ${askOpen.quote}\n\n**答：**\n\n${askOpen.text}\n`)
-                      setAskOpen(null); toast('已保存到笔记'); await reload()
-                    } catch (e: any) { toast(e.message, 'err') }
-                  }}>保存到笔记</button>
-                )}
-              </>
-            }>
-            <blockquote className="context-quote" style={{ marginTop: 0 }}>
-              <div className="q">{askOpen.quote}</div>
-            </blockquote>
-            <div className={`stream-box ${askOpen.streaming && !askOpen.text ? 'loading-dot' : ''}`}>
-              <StreamMd text={askOpen.text} streaming={askOpen.streaming} />
-            </div>
-          </Modal>
-        )}
-
         {/* 重新生成 */}
         {regenOpen && (
           <RegenModal note={note} onClose={() => setRegenOpen(false)} onDone={async () => { setRegenOpen(false); await reload() }} toast={toast} />
@@ -384,6 +371,18 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
           <ContinueModal note={note} onClose={() => setContinueOpen(false)} onDone={reload} toast={toast} />
         )}
       </div>
+
+      {/* 文献笔记的 PDF 原文分栏 */}
+      {pdfOpen && hasPdf && (
+        <div className="pdf-pane">
+          <div className="pdf-pane-head">
+            <span className="pdf-pane-title"><IconFilePdf size={15} /> 论文原文</span>
+            <a className="btn text small" href={pdfUrl} target="_blank" rel="noreferrer">新窗口打开</a>
+            <button className="btn text small" onClick={() => setPdfOpen(false)}>收起</button>
+          </div>
+          <iframe className="pdf-frame" src={pdfUrl} title="论文 PDF 原文" />
+        </div>
+      )}
 
       {/* ---------------- 右栏 ---------------- */}
       <aside className="rail">

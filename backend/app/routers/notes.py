@@ -17,6 +17,34 @@ class NoteBatch(BaseModel):
     target: str = ""  # move：目标主题（根目录）
 
 
+class NotePin(BaseModel):
+    path: str
+    pinned: bool
+
+
+class NoteFinish(BaseModel):
+    path: str
+    finished: bool
+
+
+@router.get("/pinned")
+def pinned_notes():
+    """全库置顶笔记（跨主题，侧边栏顶部「置顶」区用）。"""
+    return {"pinned": vault.list_pinned()}
+
+
+@router.post("/notes/pin")
+def pin_note(body: NotePin):
+    """设置/取消某篇笔记的置顶（写 frontmatter）。"""
+    return vault.set_pinned(body.path, body.pinned)
+
+
+@router.post("/notes/finish")
+def finish_note(body: NoteFinish):
+    """标记/取消某篇笔记「看完」（写 frontmatter）。"""
+    return vault.set_finished(body.path, body.finished)
+
+
 @router.get("/notes")
 def read_note(path: str = Query(...)):
     note = vault.read_note(path)

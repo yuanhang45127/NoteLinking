@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 from fastapi import HTTPException
 
 from ..config import get_vault_dir
-from ..markdown_utils import extract_wiki_links, parse_frontmatter
+from ..markdown_utils import build_frontmatter, extract_wiki_links, parse_frontmatter
 from ..utils import resolve_in, safe_rel_parts, sanitize_filename, unique_path
 
 
@@ -154,6 +154,7 @@ def _tree_node(vault: Path, path: Path) -> Dict:
                         "path": child.relative_to(vault).as_posix(),
                         "type": "term" if fm.get("type") == "term" else "note",
                         "title": fm.get("title") or child.stem,
+                        "finished": bool(fm.get("finished")),
                     }
                 )
         node["children"] = children
@@ -165,6 +166,56 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return ""
+
+
+# ---------------------------------------------------------------- 置顶 / 看完标记
+def list_pinned() -> List[Dict]:
+    """全库扫描 frontmatter 里 pinned: true 的笔记（跨主题，按更新时间倒序）。"""
+    vault = get_vault_dir()
+    out = []
+    for p in _iter_md(vault):
+        fm, _ = parse_frontmatter(_read_text(p))
+        if not fm.get("pinned"):
+            continue
+        rel = p.relative_to(vault).as_posix()
+        out.append(
+            {
+                "path": rel,
+                "name": p.stem,
+                "title": fm.get("title") or p.stem,
+                "topic": p.relative_to(vault).parts[0],
+                "type": "term" if fm.get("type") == "term" else "note",
+                "finished": bool(fm.get("finished")),
+                "updated_at": datetime.datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
+            }
+        )
+    out.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    return out
+
+
+def _set_fm_flag(rel: str, key: str, value: bool) -> Dict:
+    """写/清 frontmatter 布尔标记（pinned、finished 等），保留其余键与正文。"""
+    vault = get_vault_dir()
+    path = resolve_in(vault, rel)
+    if not path.exists() or path.suffix.lower() != ".md":
+        raise HTTPException(status_code=404, detail=f"笔记不存在：{rel}")
+    fm, body = parse_frontmatter(_read_text(path))
+    if value:
+        fm[key] = True
+    else:
+        fm.pop(key, None)
+    path.write_text(build_frontmatter(fm) + body, encoding="utf-8")
+    return read_note(path.relative_to(vault).as_posix())
+
+
+def set_pinned(rel: str, pinned: bool) -> Dict:
+    """设置/取消笔记置顶（frontmatter pinned 键）。"""
+    return _set_fm_flag(rel, "pinned", pinned)
+
+
+def set_finished(rel: str, finished: bool) -> Dict:
+    """标记/取消笔记「看完」（frontmatter finished 键）。"""
+    return _set_fm_flag(rel, "finished", finished)
 
 
 # ---------------------------------------------------------------- 笔记 CRUD

@@ -93,6 +93,28 @@ a { color: inherit; }
 
 .tree { flex: 1; overflow: auto; padding: 2px 2px 8px; }
 .tree-folder { margin-top: 4px; }
+
+/* 置顶笔记区：固定在目录树顶部，跨主题收集 pinned: true 的笔记 */
+.pin-section { margin: 4px 0 10px; padding-bottom: 8px; border-bottom: 1px dashed #e2e2ea; }
+.pin-label { font-size: 12px; font-weight: 700; color: var(--muted); padding: 2px 8px 6px; letter-spacing: 0.5px; }
+.pin-topic {
+  margin-left: auto; flex: none; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--muted); background: #f0f0f4; border-radius: 6px; padding: 1px 6px;
+}
+
+/* 「看完」标记：树行 ✅ + 标题灰化；阅读页绿色按钮与徽章 */
+.tree-row .finished-mark { flex: none; font-size: 12px; }
+.tree-row.finished .name { color: var(--muted); }
+.finish-badge { color: #1a7f37; background: #eaf6ee; border: 1px solid #cdeada; }
+.btn.done { color: #1a7f37; border-color: #bfe3c8; background: #f2faf4; }
+.btn.done:hover { background: #e6f5ea; }
+
+/* 文献笔记的 PDF 原文分栏 */
+.pdf-pane { width: 44%; min-width: 360px; max-width: 640px; padding: 30px 26px 60px 0; display: flex; flex-direction: column; gap: 8px; }
+.pdf-pane-head { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14.5px; }
+.pdf-pane-title { flex: 1; display: inline-flex; align-items: center; gap: 6px; }
+.pdf-frame { flex: 1; width: 100%; min-height: 74vh; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); }
+
 .tree-row {
   display: flex; align-items: center; gap: 8px;
   width: 100%; padding: 7px 8px; border: 0; background: none;
@@ -245,8 +267,8 @@ a { color: inherit; }
 .note-title { font-size: 32px; font-weight: 800; margin: 0 0 12px; letter-spacing: 0.3px; }
 .note-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
 .note-meta .ai-badge { color: var(--primary); display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
-.note-head-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-.note-actions { display: flex; gap: 10px; }
+.note-head-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.note-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 
 .md-body { line-height: 1.9; font-size: 15.5px; color: #2b2f3a; }
 .md-body h1 { font-size: 24px; margin: 34px 0 14px; }
@@ -673,6 +695,8 @@ mark.hl-anchor { cursor: pointer; }
   .page-with-rail { flex-direction: column; align-items: stretch; }
   .rail { width: auto; min-width: 0; padding: 0 24px 60px; }
   .reader { padding: 24px 24px 48px; }
+  .pdf-pane { width: auto; min-width: 0; max-width: none; padding: 0 24px 24px; }
+  .pdf-frame { min-height: 62vh; }
 }
 
 /* 窄屏：侧边栏改为抽屉，由顶栏汉堡按钮唤出 */

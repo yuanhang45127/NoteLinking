@@ -13,7 +13,19 @@ export interface TreeNode {
   path: string
   type: 'dir' | 'note' | 'term' | 'file'
   title?: string
+  finished?: boolean
   children?: TreeNode[]
+}
+
+/** 置顶笔记（侧边栏顶部「置顶」区，跨主题） */
+export interface PinnedNote {
+  path: string
+  name: string
+  title: string
+  topic: string
+  type: 'note' | 'term'
+  finished?: boolean
+  updated_at: string
 }
 
 export interface Annotation {

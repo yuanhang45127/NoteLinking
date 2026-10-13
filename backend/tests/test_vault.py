@@ -80,3 +80,65 @@ def test_backlinks_and_link_index(data_dir):
     idx = vault.build_link_index()
     out = idx["高等数学/极限与连续"]["outgoing"]
     assert "洛必达法则" in out and "导数" in out
+
+
+def test_pin_note(data_dir):
+    """置顶：写 frontmatter pinned 键，列表跨主题按更新时间倒序，取消后键被移除。"""
+    _seed()
+    vault.create_topic("AI for Law")
+    note = "高等数学/极限与连续.md"
+    term = "高等数学/terms/洛必达法则.md"
+
+    vault.set_pinned(note, True)
+    vault.set_pinned(term, True)
+    pinned = vault.list_pinned()
+    assert {p["path"] for p in pinned} == {note, term}
+
+    from app.markdown_utils import parse_frontmatter
+    fm, _ = parse_frontmatter(vault.read_note(note)["content"])
+    assert fm["pinned"] is True  # 置顶键写入 frontmatter
+
+    vault.set_pinned(note, False)
+    fm2, _ = parse_frontmatter(vault.read_note(note)["content"])
+    assert "pinned" not in fm2
+    assert [p["path"] for p in vault.list_pinned()] == [term]
+
+    with pytest.raises(HTTPException):
+        vault.set_pinned("不存在/缺失.md", True)
+
+
+def test_finish_note(data_dir):
+    """看完标记：写 frontmatter finished，树节点带 finished 标志，取消后全部清除。"""
+    from app.markdown_utils import parse_frontmatter
+
+    _seed()
+    note = "高等数学/极限与连续.md"
+    vault.set_finished(note, True)
+
+    fm, _ = parse_frontmatter(vault.read_note(note)["content"])
+    assert fm["finished"] is True
+
+    def find(nodes, path):
+        for n in nodes:
+            if n["path"] == path:
+                return n
+            if n.get("children"):
+                r = find(n["children"], path)
+                if r:
+                    return r
+
+    node = find(vault.get_tree("高等数学")["children"], note)
+    assert node["finished"] is True
+    assert find(vault.get_tree("高等数学")["children"], "高等数学/第1章/邻域.md")["finished"] is False
+
+    # 置顶列表同步带 finished 标志
+    vault.set_pinned(note, True)
+    assert vault.list_pinned()[0]["finished"] is True
+
+    vault.set_finished(note, False)
+    fm2, _ = parse_frontmatter(vault.read_note(note)["content"])
+    assert "finished" not in fm2
+    assert vault.list_pinned()[0]["finished"] is False
+
+    with pytest.raises(HTTPException):
+        vault.set_finished("不存在/缺失.md", True)
