@@ -57,6 +57,9 @@ export const IconFilePdf = (p: P) => (
 export const IconSpark = (p: P) => (
   <svg {...S(p)}><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /><circle cx="12" cy="12" r="3.2" /></svg>
 )
+export const IconChat = (p: P) => (
+  <svg {...S(p)}><path d="M21 12a8 8 0 0 1-8 8H5.5L3 21.5V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z" /><path d="M8.5 11h.01M12 11h.01M15.5 11h.01" /></svg>
+)
 export const IconArrowLeft = (p: P) => (<svg {...S(p)}><path d="M19 12H5m6 7-7-7 7-7" /></svg>)
 export const IconArrowUp = (p: P) => (<svg {...S(p)}><path d="M12 19V5m-7 7 7-7 7 7" /></svg>)
 export const IconPlus = (p: P) => (<svg {...S(p)}><path d="M12 5v14M5 12h14" /></svg>)

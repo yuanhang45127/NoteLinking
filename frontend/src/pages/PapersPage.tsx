@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../api'
+import { api, getModelOverride, streamUrls } from '../api'
 import { useApp } from '../store'
 import type { ArxivResult, Paper, ZoteroCollection, ZoteroConfig, ZoteroSyncResult } from '../types'
 import { IconTrash } from '../components/Icons'
+import { streamTracked } from '../lib/aiTasks'
 
 const STATUS: Record<string, { label: string }> = {
   unread: { label: '未读' },
@@ -25,6 +26,10 @@ export default function PapersPage() {
   const [textFilter, setTextFilter] = useState('')
   const [noteBusy, setNoteBusy] = useState('')
   const [pdfBusy, setPdfBusy] = useState('')
+  // 读书笔记：书籍导入与按章梗概生成
+  const [importBusy, setImportBusy] = useState(false)
+  const [genProgress, setGenProgress] = useState<{ [id: string]: { done: number; total: number; label: string } }>({})
+  const bookFileRef = useRef<HTMLInputElement>(null)
   // Zotero 同步
   const [zc, setZc] = useState<ZoteroConfig | null>(null)
   const [zCols, setZCols] = useState<ZoteroCollection[]>([])
@@ -124,6 +129,46 @@ export default function PapersPage() {
     finally { setNoteBusy('') }
   }
 
+  // ---------- 读书笔记 ----------
+  const importBook = async (file: File) => {
+    if (!activeTopic) return
+    setImportBusy(true)
+    try {
+      const r = await api.importBook(file, activeTopic)
+      toast(`已导入《${r.book.title}》：解析出 ${r.chapters.length} 个章节` +
+        (r.book.meta.chunked === false ? `（${r.book.meta.hint || '无章节书签，按整本处理'}）` : ''))
+      await load()
+    } catch (e: any) { toast(e.message, 'err') }
+    finally { setImportBusy(false); if (bookFileRef.current) bookFileRef.current.value = '' }
+  }
+
+  const genBookNotes = (p: Paper) => {
+    if (!p.book_id || genProgress[p.id]) return
+    setGenProgress((s) => ({ ...s, [p.id]: { done: 0, total: 0, label: '准备中' } }))
+    const clear = () => setGenProgress((s) => { const n = { ...s }; delete n[p.id]; return n })
+    streamTracked(
+      { title: `读书笔记 · ${p.title.slice(0, 14)}${p.title.length > 14 ? '…' : ''}`, kind: 'book', foreground: () => navigate('/papers') },
+      streamUrls.bookNotes(p.book_id),
+      { stream: true, ...getModelOverride() },
+      {
+        onDelta: () => { /* 章节正文不流式，进度靠事件 */ },
+        onDone: (evt) => { // done
+          clear()
+          toast(`《读书笔记》已生成${evt.failed ? `（${evt.failed} 章梗概失败）` : ''}`)
+          refreshTree()
+          if (evt.path) navigate(`/notes?path=${encodeURIComponent(evt.path)}`)
+        },
+        onError: (msg) => { clear(); toast(msg, 'err') },
+        onEvent: (evt) => {
+          if (evt.type === 'start') setGenProgress((s) => ({ ...s, [p.id]: { done: 0, total: evt.total, label: '开始生成' } }))
+          else if (evt.type === 'chapter_start') setGenProgress((s) => ({ ...s, [p.id]: { done: evt.index, total: evt.total, label: evt.title } }))
+          else if (evt.type === 'chapter_done') setGenProgress((s) => ({ ...s, [p.id]: { done: evt.index + 1, total: evt.total, label: evt.title } }))
+          else if (evt.type === 'chapter_error') setGenProgress((s) => ({ ...s, [p.id]: { done: evt.index + 1, total: evt.total, label: `${evt.title}（失败）` } }))
+        },
+      },
+    )
+  }
+
   const shown = papers.filter((p) =>
     (filter === 'all' || p.status === filter) &&
     (!textFilter.trim() ||
@@ -203,6 +248,25 @@ export default function PapersPage() {
 
         {activeTopic && (
           <>
+            <div className="settings-card">
+              <h3>📖 导入书籍 · 读书笔记</h3>
+              <div className="desc">
+                上传整本 PDF 或 EPUB：解析章节 → AI 逐章生成内容梗概 → 生成《书名》读书笔记（每章梗概 + 你自己的笔记区）。
+                PDF 优先按书签分章，无书签的书按整本处理。
+              </div>
+              <div className="papers-search">
+                <input ref={bookFileRef} type="file" accept=".pdf,.epub" style={{ display: 'none' }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) importBook(f) }} />
+                <button className="btn primary" disabled={importBusy}
+                  onClick={() => bookFileRef.current?.click()}>
+                  {importBusy ? '解析中…' : '选择 PDF / EPUB 上传'}
+                </button>
+                <span className="sl-sub" style={{ margin: 0 }}>
+                  导入到主题「{activeTopic}」，书目状态（在读/已读）与论文共用一套
+                </span>
+              </div>
+            </div>
+
             <div className="settings-card">
               <h3>Zotero 同步</h3>
               <div className="desc">
@@ -307,21 +371,37 @@ export default function PapersPage() {
                   <div className="paper-main">
                     {p.url
                       ? <a className="paper-title" href={p.url} target="_blank" rel="noreferrer">{p.title}</a>
-                      : <span className="paper-title">{p.title}</span>}
+                      : <span className="paper-title">{p.kind === 'book' ? `📖 ${p.title}` : p.title}</span>}
                     <div className="paper-meta">
-                      {p.authors.slice(0, 3).join(', ')}{p.authors.length > 3 ? ' 等' : ''}
+                      {p.kind === 'book' && '书籍'}
+                      {p.kind !== 'book' && p.authors.slice(0, 3).join(', ')}
+                      {p.kind !== 'book' && p.authors.length > 3 ? ' 等' : ''}
                       {p.year && ` · ${p.year}`}{p.venue && ` · ${p.venue}`}
                       {p.arxiv_id && ` · arXiv:${p.arxiv_id}`}
                     </div>
-                    {p.abstract && (
+                    {p.abstract && p.kind !== 'book' && (
                       <div className="paper-abs">{p.abstract.slice(0, 120)}{p.abstract.length > 120 ? '…' : ''}</div>
                     )}
                     {p.comment && <div className="paper-comment">💭 {p.comment}</div>}
+                    {genProgress[p.id] && (
+                      <div className="paper-comment">
+                        ⏳ 生成梗概中 {genProgress[p.id].done}/{genProgress[p.id].total || '…'}
+                        ：{genProgress[p.id].label}
+                      </div>
+                    )}
                     <div className="paper-acts">
-                      <button className="btn text small" disabled={noteBusy === p.id}
-                        title="按论文元数据生成阅读笔记，保存到主题的「文献」目录"
-                        onClick={() => genNote(p)}>✦ 生成阅读笔记</button>
-                      {p.pdf_path ? (
+                      {p.kind === 'book' ? (
+                        <button className="btn text small" disabled={!p.book_id || !!genProgress[p.id]}
+                          title="逐章生成内容梗概，落盘为《书名》读书笔记（每章梗概 + 自己的笔记区）"
+                          onClick={() => genBookNotes(p)}>
+                          {genProgress[p.id] ? '⏳ 生成中…' : '✦ 生成读书笔记'}
+                        </button>
+                      ) : (
+                        <button className="btn text small" disabled={noteBusy === p.id}
+                          title="按论文元数据生成阅读笔记，保存到主题的「文献」目录"
+                          onClick={() => genNote(p)}>✦ 生成阅读笔记</button>
+                      )}
+                      {p.kind !== 'book' && (p.pdf_path ? (
                         <>
                           <a className="btn text small" href={`/api/papers/${encodeURIComponent(p.id)}/pdf?topic=${encodeURIComponent(activeTopic || '')}`}
                             target="_blank" rel="noreferrer">📄 打开 PDF</a>
@@ -333,7 +413,7 @@ export default function PapersPage() {
                         <button className="btn text small" disabled={pdfBusy === p.id}
                           title="从 arxiv.org 下载 PDF 附件"
                           onClick={() => fetchPdf(p)}>📄 下载 PDF</button>
-                      ) : null}
+                      ) : null)}
                       <button className="btn text small" onClick={() => {
                         const c = window.prompt('这条文献的想法/批注：', p.comment || '')
                         if (c === null || !activeTopic) return

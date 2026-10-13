@@ -4,7 +4,7 @@ from typing import List
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from ..schemas import NoteCreate, NoteMove, NoteSave
+from ..schemas import NoteAppend, NoteCreate, NoteMove, NoteSave
 from ..services import annotations_store, vault
 from ..utils import sanitize_filename
 
@@ -86,6 +86,12 @@ def create_note(body: NoteCreate):
 @router.put("/notes")
 def save_note(body: NoteSave):
     return vault.save_note(body.path, body.content)
+
+
+@router.post("/notes/append")
+def append_note(body: NoteAppend):
+    """把一段 Markdown 追加到笔记末尾（不动原文），供对话存入、AI 工具与 MCP 共用。"""
+    return vault.append_to_note(body.path, body.text, body.heading)
 
 
 @router.post("/notes/move")

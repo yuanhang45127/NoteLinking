@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { api, getModelOverride, streamSSE, streamUrls } from '../api'
+import { api, getModelOverride, streamUrls } from '../api'
 import { useApp } from '../store'
+import { streamTracked } from '../lib/aiTasks'
 import {
   IconCaretDown, IconCheck, IconChevron, IconConcept, IconDoc, IconFilePdf, IconFolder,
   IconFolderOpen, IconGear, IconGraph, IconGrad, IconNote, IconPlus,
@@ -610,9 +611,23 @@ function ArchitectureModal({ topic, onClose, onGenerateNotes }: {
   const [text, setText] = useState('')
   const [savedPath, setSavedPath] = useState('')
   const [err, setErr] = useState('')
+  const [bg, setBg] = useState(false)
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
   const navigate = useNavigate()
   const { refreshTree, toast } = useApp()
+  // 后台期间完成时暂存结果，回到前台再跳转（避免在用户看别的页面时突然切走）
+  const pendingRef = useRef('')
+  const bgRef = useRef(bg)
+  bgRef.current = bg
+
+  const foreground = () => {
+    setBg(false)
+    if (pendingRef.current) {
+      const p = pendingRef.current
+      pendingRef.current = ''
+      navigate(`/notes?path=${encodeURIComponent(p)}`)
+    }
+  }
 
   // 按「建议知识架构」最小等级创建主题目录骨架（已存在目录跳过）
   const scaffoldDirs = async () => {
@@ -626,23 +641,32 @@ function ArchitectureModal({ topic, onClose, onGenerateNotes }: {
   }
 
   useEffect(() => {
-    ctrlRef.current = streamSSE(streamUrls.topicArchitecture, {
-      topic, stream: true, ...getModelOverride(),
-    },
-      (t) => setText((s) => s + t),
-      (evt) => {
-        if (evt?.saved_path) {
-          setSavedPath(evt.saved_path)
-          refreshTree()
-          navigate(`/notes?path=${encodeURIComponent(evt.saved_path)}`)
-        } else {
-          setErr('生成完成但保存失败，请重试')
-        }
+    const t = streamTracked(
+      { title: `生成整体架构 · ${topic}`, kind: 'note', foreground },
+      streamUrls.topicArchitecture, {
+        topic, stream: true, ...getModelOverride(),
       },
-      (msg) => setErr(msg))
-    return () => ctrlRef.current?.abort()
+      {
+        onDelta: (x) => setText((s) => s + x),
+        onDone: (evt) => {
+          if (evt?.saved_path) {
+            setSavedPath(evt.saved_path)
+            refreshTree()
+            if (bgRef.current) pendingRef.current = evt.saved_path
+            else navigate(`/notes?path=${encodeURIComponent(evt.saved_path)}`)
+          } else {
+            setErr('生成完成但保存失败，请重试')
+          }
+        },
+        onError: (msg) => setErr(msg),
+        summarizeDone: (evt) => (evt?.saved_path ? `已保存：${evt.saved_path}` : undefined),
+      })
+    ctrlRef.current = t
+    return () => t.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topic])
+
+  if (bg) return null
 
   return (
     <Modal title={`生成整体架构 · ${topic}`} onClose={() => { ctrlRef.current?.abort(); onClose() }} wide
@@ -651,6 +675,7 @@ function ArchitectureModal({ topic, onClose, onGenerateNotes }: {
           {!err && <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--muted)' }}>
             {savedPath ? '已保存 ✓ 正在打开…' : '流式生成中…'}
           </span>}
+          {!savedPath && !err && <button className="btn" title="收起弹窗，生成继续在右下角悬浮窗里跑" onClick={() => setBg(true)}>后台</button>}
           <button className="btn" disabled={!savedPath} title="按「建议知识架构」的最小等级创建目录"
             onClick={scaffoldDirs}>按架构生成目录</button>
           <button className="btn" disabled={!savedPath} title="按提纲从最小等级逐篇用 AI 生成全部笔记"
@@ -681,36 +706,41 @@ function GenerateNotesModal({ topic, savePath, onClose }: {
   const [items, setItems] = useState<GenItem[]>([])
   const [finished, setFinished] = useState(false)
   const [err, setErr] = useState('')
+  const [bg, setBg] = useState(false)
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const { refreshTree, toast } = useApp()
 
   useEffect(() => {
-    ctrlRef.current = streamSSE(
+    const t = streamTracked(
+      { title: `批量生成笔记 · ${topic}`, kind: 'note', foreground: () => setBg(false) },
       streamUrls.topicGenerateNotes,
       { topic, save_path: savePath, ...getModelOverride() },
-      () => {}, // 批量模式不流式展示单篇正文，只看进度
-      (evt) => {
-        setFinished(true)
-        refreshTree()
-        toast(`笔记生成完成：成功 ${evt.created ?? 0} 篇${evt.failed ? `，失败 ${evt.failed} 篇` : ''}`)
-      },
-      (msg) => { setErr(msg); toast(msg, 'err') },
-      (evt) => {
-        if (evt.type === 'start') {
-          setItems(Array.from({ length: evt.total }, () => ({ title: '', status: 'pending' as const })))
-        } else if (evt.type === 'note_start') {
-          setItems((s) => s.map((it, i) => (i === evt.index ? { title: evt.title, status: 'running' } : it)))
-        } else if (evt.type === 'note_done') {
-          setItems((s) => s.map((it, i) => (i === evt.index ? { ...it, status: 'done' } : it)))
-        } else if (evt.type === 'note_skip') {
-          setItems((s) => s.map((it, i) => (i === evt.index ? { ...it, status: 'skip', msg: evt.reason } : it)))
-        } else if (evt.type === 'note_error') {
-          setItems((s) => s.map((it, i) => (i === evt.index ? { ...it, status: 'error', msg: evt.message } : it)))
-        }
-      },
-    )
-    return () => ctrlRef.current?.abort()
+      {
+        onDelta: () => { /* 批量模式不流式展示单篇正文，只看进度 */ },
+        onDone: (evt) => {
+          setFinished(true)
+          refreshTree()
+          toast(`笔记生成完成：成功 ${evt.created ?? 0} 篇${evt.failed ? `，失败 ${evt.failed} 篇` : ''}`)
+        },
+        onError: (msg) => { setErr(msg); toast(msg, 'err') },
+        summarizeDone: (evt) => `成功 ${evt?.created ?? 0} 篇${evt?.failed ? `，失败 ${evt.failed} 篇` : ''}`,
+        onEvent: (evt) => {
+          if (evt.type === 'start') {
+            setItems(Array.from({ length: evt.total }, () => ({ title: '', status: 'pending' as const })))
+          } else if (evt.type === 'note_start') {
+            setItems((s) => s.map((it, i) => (i === evt.index ? { title: evt.title, status: 'running' } : it)))
+          } else if (evt.type === 'note_done') {
+            setItems((s) => s.map((it, i) => (i === evt.index ? { ...it, status: 'done' } : it)))
+          } else if (evt.type === 'note_skip') {
+            setItems((s) => s.map((it, i) => (i === evt.index ? { ...it, status: 'skip', msg: evt.reason } : it)))
+          } else if (evt.type === 'note_error') {
+            setItems((s) => s.map((it, i) => (i === evt.index ? { ...it, status: 'error', msg: evt.message } : it)))
+          }
+        },
+      })
+    ctrlRef.current = t
+    return () => t.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -721,6 +751,8 @@ function GenerateNotesModal({ topic, savePath, onClose }: {
   const doneCount = items.filter((i) => i.status === 'done' || i.status === 'skip' || i.status === 'error').length
   const icon: Record<GenItem['status'], string> = { pending: '·', running: '⏳', done: '✅', skip: '⏭', error: '❌' }
 
+  if (bg) return null
+
   return (
     <Modal title={`按架构生成全部笔记 · ${topic}`} onClose={() => { ctrlRef.current?.abort(); onClose() }} wide
       ops={
@@ -728,6 +760,7 @@ function GenerateNotesModal({ topic, savePath, onClose }: {
           <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--muted)' }}>
             {err ? '已停止' : finished ? `全部完成（${items.length} 篇）` : `生成中 ${doneCount} / ${items.length || '…'}`}
           </span>
+          {!finished && !err && <button className="btn" title="收起弹窗，生成继续在右下角悬浮窗里跑" onClick={() => setBg(true)}>后台</button>}
           <button className="btn" onClick={() => { ctrlRef.current?.abort(); onClose() }}>
             {finished ? '关闭' : '中止'}
           </button>

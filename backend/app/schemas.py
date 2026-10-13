@@ -38,6 +38,12 @@ class NoteMove(BaseModel):
     dst: str
 
 
+class NoteAppend(BaseModel):
+    path: str
+    text: str
+    heading: str = Field("", description="可选的小节标题，如「AI 补充」")
+
+
 # ---- 高亮标注 ----
 class AnnotationCreate(BaseModel):
     path: str
@@ -155,6 +161,33 @@ class StudyGuideRequest(BaseModel):
     save_path: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+
+
+# ---- 读书笔记 ----
+class BookNotesRequest(BaseModel):
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
+# ---- AI 对话 ----
+class ChatSessionCreate(BaseModel):
+    title: str = ""
+
+
+class ChatSessionRename(BaseModel):
+    title: str
+
+
+class ChatTurnRequest(BaseModel):
+    content: str = ""
+    context_paths: List[str] = Field(
+        default_factory=list,
+        description="@引用/拖入/划选加入的上下文：笔记路径、路径#章节标题，或 text:{\"t\": 选中文字, \"s\": 来源}",
+    )
+    regenerate: bool = Field(False, description="重新生成：不追加提问，重答最后一问")
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = None
 
 
 # ---- 设置 ----

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, getModelOverride, llmUrls, streamSSE, streamUrls } from '../api'
+import { useNavigate } from 'react-router-dom'
+import { api, getModelOverride, llmUrls, streamUrls } from '../api'
 import { useApp } from '../store'
 import type { Attempt, ChatMsg, Checklist, Exam, Goal, Question, TreeNode } from '../types'
 import Modal from '../components/Modal'
 import StreamMd from '../components/StreamMd'
 import { renderMarkdown } from '../lib/md'
+import { streamTracked } from '../lib/aiTasks'
 import {
   IconCard, IconCheck, IconConcept, IconDoc, IconFilePdf, IconList,
   IconSend, IconSpark, IconWand,
@@ -14,6 +16,7 @@ const TYPE_LABEL: Record<string, string> = { mcq: '选择题', short: '简答题
 
 export default function ExamPage() {
   const { activeTopic, tree, refreshTree, toast } = useApp()
+  const navigate = useNavigate()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [goals, setGoals] = useState<Goal[]>([])
   const [checklist, setChecklist] = useState<Checklist | null>(null)
@@ -28,6 +31,10 @@ export default function ExamPage() {
   const [checklistOpen, setChecklistOpen] = useState(false)
   const [quizModal, setQuizModal] = useState<null | 'smart' | 'mock'>(null)
   const [genState, setGenState] = useState<{ label: string; text: string } | null>(null)
+  // 「后台」隐藏生成弹窗但保留 genState（字数继续累计），经悬浮窗「前台」恢复
+  const [genHidden, setGenHidden] = useState(false)
+  const genHiddenRef = useRef(genHidden)
+  genHiddenRef.current = genHidden
   const chatEnd = useRef<HTMLDivElement>(null)
 
   const allNotes = useMemo(() => {
@@ -72,24 +79,29 @@ export default function ExamPage() {
   const generate = (opts: { types: string[]; count: number; difficulty: string; label: string }) => {
     if (!selectedPaths.length) { toast('请先勾选至少一份资料', 'err'); return }
     setBusy(true)
+    setGenHidden(false)
     setGenState({ label: opts.label, text: '' })
-    streamSSE(streamUrls.examGenerate, {
-      paths: selectedPaths, types: opts.types, count: opts.count,
-      difficulty: opts.difficulty, stream: true, ...getModelOverride(),
-    },
-      (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
-      async (evt) => {
-        setGenState(null); setBusy(false)
-        if (!evt?.exam_id) { toast('生成失败，请重试', 'err'); return }
-        const exam: Exam = await api.getExam(evt.exam_id)
-        setMessages((m) => [...m, {
-          role: 'assistant',
-          content: `好的，已基于${exam.scope.titles.slice(0, 3).map((t) => `《${t}》`).join('')}生成 ${exam.questions.length} 道题（${opts.types.map((t) => TYPE_LABEL[t] || t).join('、')}，难度 ${opts.difficulty}）。`,
-          quizExamId: exam.id, quizSummary: exam.title,
-        }])
-        setQuiz({ exam, label: opts.label })
+    streamTracked({ title: `${opts.label} · 出题`, kind: 'exam', foreground: () => setGenHidden(false) },
+      streamUrls.examGenerate, {
+        paths: selectedPaths, types: opts.types, count: opts.count,
+        difficulty: opts.difficulty, stream: true, ...getModelOverride(),
       },
-      (msg) => { setGenState(null); setBusy(false); toast(msg, 'err') })
+      {
+        onDelta: (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+        onDone: async (evt) => {
+          setGenState(null); setGenHidden(false); setBusy(false)
+          if (!evt?.exam_id) { toast('生成失败，请重试', 'err'); return }
+          if (genHiddenRef.current) { toast(`${opts.label}已生成，回考试页查看`); return }
+          const exam: Exam = await api.getExam(evt.exam_id)
+          setMessages((m) => [...m, {
+            role: 'assistant',
+            content: `好的，已基于${exam.scope.titles.slice(0, 3).map((t) => `《${t}》`).join('')}生成 ${exam.questions.length} 道题（${opts.types.map((t) => TYPE_LABEL[t] || t).join('、')}，难度 ${opts.difficulty}）。`,
+            quizExamId: exam.id, quizSummary: exam.title,
+          }])
+          setQuiz({ exam, label: opts.label })
+        },
+        onError: (msg) => { setGenState(null); setGenHidden(false); setBusy(false); toast(msg, 'err') },
+      })
   }
 
   const send = async () => {
@@ -110,56 +122,76 @@ export default function ExamPage() {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
     setMessages((m) => [...m, { role: 'assistant', content: '' }])
-    streamSSE(llmUrls.tutorChat, { paths: selectedPaths, messages: [...messages, { role: 'user', content: text }].slice(-10).map((x) => ({ role: x.role, content: x.content })), stream: true, ...getModelOverride() },
-      (t) => setMessages((m) => { const c = [...m]; c[c.length - 1] = { ...c[c.length - 1], content: c[c.length - 1].content + t }; return c }),
-      () => setBusy(false),
-      (msg) => { setBusy(false); toast(msg, 'err') })
+    streamTracked({ title: `备考助教 · ${text.slice(0, 16)}${text.length > 16 ? '…' : ''}`, kind: 'tutor', foreground: () => navigate('/exam') },
+      llmUrls.tutorChat, { paths: selectedPaths, messages: [...messages, { role: 'user', content: text }].slice(-10).map((x) => ({ role: x.role, content: x.content })), stream: true, ...getModelOverride() },
+      {
+        onDelta: (t) => setMessages((m) => { const c = [...m]; c[c.length - 1] = { ...c[c.length - 1], content: c[c.length - 1].content + t }; return c }),
+        onDone: () => setBusy(false),
+        onError: (msg) => { setBusy(false); toast(msg, 'err') },
+      })
   }
 
   const quickChecklist = () => {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
+    setGenHidden(false)
     setGenState({ label: '考点清单', text: '' })
-    streamSSE(streamUrls.checklist, { paths: selectedPaths, stream: true, ...getModelOverride() },
-      (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
-      (evt) => {
-        setGenState(null); setBusy(false)
-        if (evt?.checklist) { setChecklist(evt.checklist); setChecklistOpen(true) }
-        else toast('生成失败，请重试', 'err')
-      },
-      (msg) => { setGenState(null); setBusy(false); toast(msg, 'err') })
+    streamTracked({ title: '考点清单', kind: 'exam', foreground: () => setGenHidden(false) },
+      streamUrls.checklist, { paths: selectedPaths, stream: true, ...getModelOverride() },
+      {
+        onDelta: (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+        onDone: (evt) => {
+          setGenState(null); setGenHidden(false); setBusy(false)
+          if (!evt?.checklist) { toast('生成失败，请重试', 'err'); return }
+          if (genHiddenRef.current) { toast('考点清单已生成，回考试页查看'); return }
+          setChecklist(evt.checklist); setChecklistOpen(true)
+        },
+        onError: (msg) => { setGenState(null); setGenHidden(false); setBusy(false); toast(msg, 'err') },
+        summarizeDone: () => '已生成，回考试页查看',
+      })
   }
 
   const quickGuide = () => {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
+    setGenHidden(false)
     setGenState({ label: '学习指南', text: '' })
-    streamSSE(streamUrls.studyGuide, { paths: selectedPaths, stream: true, ...getModelOverride() },
-      (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
-      (evt) => {
-        setGenState(null); setBusy(false)
-        if (evt?.markdown) setGuideOpen(evt.markdown)
-        else toast('生成失败，请重试', 'err')
-      },
-      (msg) => { setGenState(null); setBusy(false); toast(msg, 'err') })
+    streamTracked({ title: '学习指南', kind: 'exam', foreground: () => setGenHidden(false) },
+      streamUrls.studyGuide, { paths: selectedPaths, stream: true, ...getModelOverride() },
+      {
+        onDelta: (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+        onDone: (evt) => {
+          setGenState(null); setGenHidden(false); setBusy(false)
+          if (!evt?.markdown) { toast('生成失败，请重试', 'err'); return }
+          if (genHiddenRef.current) { toast('学习指南已生成，回考试页查看'); return }
+          setGuideOpen(evt.markdown)
+        },
+        onError: (msg) => { setGenState(null); setGenHidden(false); setBusy(false); toast(msg, 'err') },
+        summarizeDone: () => '已生成，回考试页查看',
+      })
   }
 
   const openFlashcards = () => {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
+    setGenHidden(false)
     setGenState({ label: '记忆闪卡', text: '' })
-    streamSSE(streamUrls.examGenerate, {
-      paths: selectedPaths, types: ['flashcard'], count: 8,
-      difficulty: 'medium', stream: true, ...getModelOverride(),
-    },
-      (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
-      async (evt) => {
-        setGenState(null); setBusy(false)
-        if (!evt?.exam_id) { toast('生成失败，请重试', 'err'); return }
-        const exam: Exam = await api.getExam(evt.exam_id)
-        setCards(exam.questions.filter((q) => q.type === 'flashcard'))
+    streamTracked({ title: '记忆闪卡', kind: 'exam', foreground: () => setGenHidden(false) },
+      streamUrls.examGenerate, {
+        paths: selectedPaths, types: ['flashcard'], count: 8,
+        difficulty: 'medium', stream: true, ...getModelOverride(),
       },
-      (msg) => { setGenState(null); setBusy(false); toast(msg, 'err') })
+      {
+        onDelta: (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+        onDone: async (evt) => {
+          setGenState(null); setGenHidden(false); setBusy(false)
+          if (!evt?.exam_id) { toast('生成失败，请重试', 'err'); return }
+          if (genHiddenRef.current) { toast('记忆闪卡已生成，回考试页查看'); return }
+          const exam: Exam = await api.getExam(evt.exam_id)
+          setCards(exam.questions.filter((q) => q.type === 'flashcard'))
+        },
+        onError: (msg) => { setGenState(null); setGenHidden(false); setBusy(false); toast(msg, 'err') },
+      })
   }
 
   const masteredCount = checklist?.items.filter((i) => i.mastered).length ?? 0
@@ -282,9 +314,14 @@ export default function ExamPage() {
       </div>
 
       {/* 弹窗 */}
-      {genState && (
+      {genState && !genHidden && (
         <Modal title={`正在生成 · ${genState.label}`} onClose={() => setGenState(null)} wide
-          ops={<span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--muted)' }}>流式生成中…</span>}>
+          ops={
+            <>
+              <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--muted)' }}>流式生成中…</span>
+              <button className="btn" title="收起弹窗，生成继续在右下角悬浮窗里跑" onClick={() => setGenHidden(true)}>后台</button>
+            </>
+          }>
           <div className={`stream-box ${!genState.text ? 'loading-dot' : ''}`} style={{ maxHeight: 420, overflow: 'auto' }}>
             <StreamMd text={genState.text} streaming />
           </div>
@@ -334,7 +371,10 @@ export default function ExamPage() {
             <>
               <button className="btn primary" style={{ marginRight: 'auto' }} onClick={async () => {
                 try {
-                  await api.createNote(`${activeTopic}/_备考/学习指南-${new Date().toISOString().slice(0, 10)}.md`, guideOpen)
+                  // AI 生成的学习指南：落盘带 generated 标记（锁定手动编辑）
+                  const today = new Date().toISOString().slice(0, 10)
+                  const fm = guideOpen.startsWith('---') ? '' : `---\ngenerated: true\ncreated: ${today}\n---\n\n`
+                  await api.createNote(`${activeTopic}/_备考/学习指南-${today}.md`, fm + guideOpen)
                   toast('已保存为笔记'); refreshTree(); setGuideOpen(null)
                 } catch (e: any) { toast(e.message, 'err') }
               }}>保存为笔记</button>
@@ -432,6 +472,7 @@ function QuizModal({ mode, onClose, onGenerate }: { mode: 'smart' | 'mock'; onCl
 
 /* ---------------- 测验执行 ---------------- */
 function QuizRunner({ exam, label, onClose, toast }: { exam: Exam; label: string; onClose: () => void; toast: any }) {
+  const navigate = useNavigate()
   const questions = exam.questions.filter((q) => q.type !== 'flashcard')
   const [idx, setIdx] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string>>({})
@@ -450,23 +491,26 @@ function QuizRunner({ exam, label, onClose, toast }: { exam: Exam; label: string
     setSubmitting(true)
     const shortQs = questions.filter((x) => x.type === 'short')
     setGrading({ total: shortQs.length, rows: {} })
-    streamSSE(streamUrls.attempt(exam.id), {
-      answers: questions.map((x) => ({ question_id: x.id, answer: answers[x.id] || '' })),
-    },
-      () => { /* 评卷事件走 onEvent */ },
-      (evt) => {
-        setGrading(null); setSubmitting(false)
-        if (evt?.attempt) setResult(evt.attempt as Attempt)
-        else toast('评卷失败，请重试', 'err')
+    streamTracked({ title: `评卷 · ${exam.title}`, kind: 'exam', foreground: () => navigate('/exam') },
+      streamUrls.attempt(exam.id), {
+        answers: questions.map((x) => ({ question_id: x.id, answer: answers[x.id] || '' })),
       },
-      (msg) => { setGrading(null); setSubmitting(false); toast(msg, 'err') },
-      (evt) => {
-        if (evt?.type === 'grade') {
-          setGrading((g) => (g ? {
-            total: g.total,
-            rows: { ...g.rows, [evt.question_id]: { score: evt.score, feedback: evt.feedback } },
-          } : g))
-        }
+      {
+        onDelta: () => { /* 评卷事件走 onEvent */ },
+        onDone: (evt) => {
+          setGrading(null); setSubmitting(false)
+          if (evt?.attempt) setResult(evt.attempt as Attempt)
+          else toast('评卷失败，请重试', 'err')
+        },
+        onError: (msg) => { setGrading(null); setSubmitting(false); toast(msg, 'err') },
+        onEvent: (evt) => {
+          if (evt?.type === 'grade') {
+            setGrading((g) => (g ? {
+              total: g.total,
+              rows: { ...g.rows, [evt.question_id]: { score: evt.score, feedback: evt.feedback } },
+            } : g))
+          }
+        },
       })
   }
 

@@ -2,9 +2,12 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useCallback, useEffect, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import TopBar from './components/TopBar'
+import ChatDock from './components/ChatDock'
 import LoginGate from './components/LoginGate'
+import AiTaskFloat from './components/AiTaskFloat'
 import { useApp } from './store'
 import { api } from './api'
+import { chatDock } from './components/chat/chatDockSignal'
 import { LogoMark } from './components/Icons'
 
 type Gate = 'checking' | 'login' | 'token' | 'ok'
@@ -50,12 +53,13 @@ export default function App() {
     return () => { cancelled = true }
   }, [proceed, setUser])
 
-  // 快捷键：n 笔记 / g 图谱 / e 考试 / s 设置
+  // 快捷键：n 笔记 / g 图谱 / e 考试 / s 设置 / c AI 对话面板
   // 注意：必须放在条件 return 之前，否则 hooks 顺序会随 gate 变化（React #310）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
+      if (e.key === 'c' && !e.metaKey && !e.ctrlKey && !e.altKey) { chatDock.toggle(); return }
       const map: Record<string, string> = { n: '/notes', g: '/graph', e: '/exam', s: '/settings' }
       const to = map[e.key]
       if (to && !e.metaKey && !e.ctrlKey && !e.altKey) navigate(to)
@@ -84,6 +88,8 @@ export default function App() {
           <Outlet />
         </div>
       </div>
+      <ChatDock />
+      <AiTaskFloat />
       <div className="toast-wrap">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.kind}`}>{t.text}</div>

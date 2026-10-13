@@ -5,7 +5,8 @@ import { useApp } from '../store'
 import type { NoteDetail } from '../types'
 import ReaderView from '../components/ReaderView'
 import TermStreamModal from '../components/TermStreamModal'
-import { IconArrowLeft, IconConcept, IconDoc, IconGraph } from '../components/Icons'
+import TermToNoteModal from '../components/TermToNoteModal'
+import { IconArrowLeft, IconConcept, IconDoc, IconGraph, IconWand } from '../components/Icons'
 
 /**
  * 概念页：概念文档就是存在 terms/ 下的普通 md 笔记，与笔记共用同一个
@@ -20,6 +21,7 @@ export default function ConceptPage() {
   const [note, setNote] = useState<NoteDetail | null>(null)
   const [missing, setMissing] = useState(false)
   const [regenOpen, setRegenOpen] = useState(false)
+  const [toNoteOpen, setToNoteOpen] = useState(false)
 
   const load = useCallback(async () => {
     if (!path) { setMissing(true); return }
@@ -66,6 +68,18 @@ export default function ConceptPage() {
         onRegen={openRegen}
         railTop={
         <>
+          <div className="rail-card accent">
+            <div className="rail-title"><IconWand size={16} /> 转为完整笔记</div>
+            <div style={{ fontSize: 13, color: '#4a4f66', lineHeight: 1.7 }}>
+              从「{note.name}」这个概念出发，AI 深入讲述它的具体解释与用处，展开成一篇完整笔记。
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <button className="btn small primary" onClick={() => setToNoteOpen(true)}>
+                开始生成 →
+              </button>
+            </div>
+          </div>
+
           <div className="rail-card">
             <div className="rail-title">
               <IconArrowLeft size={16} style={{ transform: 'rotate(180deg)' } as any} /> 反向链接 · 被这些笔记引用
@@ -105,6 +119,14 @@ export default function ConceptPage() {
           regenerate
           onClose={() => setRegenOpen(false)}
           onDone={() => { setRegenOpen(false); reload() }}
+        />
+      )}
+      {toNoteOpen && (
+        <TermToNoteModal
+          path={note.path}
+          term={note.name}
+          onClose={() => setToNoteOpen(false)}
+          onDone={(savedPath) => { setToNoteOpen(false); reload(); navigate(`/notes?path=${encodeURIComponent(savedPath)}`) }}
         />
       )}
     </>

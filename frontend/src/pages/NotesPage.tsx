@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { api, getModelOverride, llmUrls, streamSSE } from '../api'
+import { api, getModelOverride, llmUrls } from '../api'
 import { useApp } from '../store'
 import type { NoteDetail, TreeNode } from '../types'
 import ReaderView from '../components/ReaderView'
 import Modal from '../components/Modal'
 import StreamMd from '../components/StreamMd'
+import { streamTracked } from '../lib/aiTasks'
 
 export default function NotesPage() {
   const { activeTopic, treeTopic, tree, refreshTree, refreshTopics, settings, toast } = useApp()
@@ -18,11 +19,12 @@ export default function NotesPage() {
   const [missing, setMissing] = useState(false)
 
   // 切换主题后，URL 里还挂着上一个主题的笔记路径 → 清掉，让页面回到当前主题
+  // （跨主题双链跳转会先切主题再带 path 进来，path 属于新主题时保留）
   const lastTopic = useRef(activeTopic)
   useEffect(() => {
     if (lastTopic.current === activeTopic) return
     lastTopic.current = activeTopic
-    if (path) setParams({}, { replace: true })
+    if (path && !path.startsWith(`${activeTopic}/`)) setParams({}, { replace: true })
   }, [activeTopic, path, setParams])
 
   // 目录与当前主题一致时，无选中笔记则自动打开第一篇
@@ -127,26 +129,48 @@ function GenerateModal({ topic, onClose, onCreated, toast }: {
   const [prompt, setPrompt] = useState('')
   const [text, setText] = useState('')
   const [running, setRunning] = useState(false)
+  const [bg, setBg] = useState(false)
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
+  // 后台期间完成时暂存结果，回到前台再交付（避免在用户看别的页面时突然跳转）
+  const pendingRef = useRef('')
+  const bgRef = useRef(bg)
+  bgRef.current = bg
+  const createdRef = useRef(onCreated)
+  createdRef.current = onCreated
 
   const safeTitle = title.trim().replace(/[\\/:*?"<>|]/g, ' ').trim()
   const canStart = !running && !!safeTitle && !!prompt.trim()
 
+  const foreground = () => {
+    setBg(false)
+    if (pendingRef.current) { const p = pendingRef.current; pendingRef.current = ''; createdRef.current(p) }
+  }
+
   const start = () => {
     if (!canStart) return
     setRunning(true); setText('')
-    ctrlRef.current = streamSSE(llmUrls.generateNote, {
-      topic, prompt: prompt.trim(), title: safeTitle, stream: true,
-      save_path: `${topic}/${safeTitle}.md`,
-      ...getModelOverride(),
-    }, (t) => setText((s) => s + t),
-      (evt) => {
-        setRunning(false)
-        if (evt?.saved_path) onCreated(evt.saved_path)
-        else { toast('生成完成，但保存失败，请重试', 'err'); onClose() }
+    ctrlRef.current = streamTracked(
+      { title: `生成笔记 · ${safeTitle}`, kind: 'note', foreground },
+      llmUrls.generateNote, {
+        topic, prompt: prompt.trim(), title: safeTitle, stream: true,
+        save_path: `${topic}/${safeTitle}.md`,
+        ...getModelOverride(),
       },
-      (msg) => { setRunning(false); toast(msg, 'err') })
+      {
+        onDelta: (t) => setText((s) => s + t),
+        onDone: (evt) => {
+          setRunning(false)
+          if (evt?.saved_path) {
+            if (bgRef.current) pendingRef.current = evt.saved_path
+            else createdRef.current(evt.saved_path)
+          } else { toast('生成完成，但保存失败，请重试', 'err'); onClose() }
+        },
+        onError: (msg) => { setRunning(false); toast(msg, 'err') },
+        summarizeDone: (evt) => (evt?.saved_path ? `已保存：${evt.saved_path}` : undefined),
+      })
   }
+
+  if (bg) return null
 
   return (
     <Modal title={`AI 生成笔记 · ${topic}`} onClose={() => { ctrlRef.current?.abort(); onClose() }} wide
@@ -157,6 +181,7 @@ function GenerateModal({ topic, onClose, onCreated, toast }: {
           {text && !running && (
             <button className="btn primary" style={{ marginRight: 'auto' }} onClick={start}>重新生成</button>
           )}
+          {running && <button className="btn" title="收起弹窗，生成继续在右下角悬浮窗里跑" onClick={() => setBg(true)}>后台</button>}
           <button className="btn" onClick={() => { ctrlRef.current?.abort(); onClose() }}>关闭</button>
         </>
       }>

@@ -1,6 +1,6 @@
 // 后端 API 客户端 + SSE 流式工具
 import type {
-  Annotation, ArxivResult, Checklist, Exam, Goal, GraphData, NoteDetail, Paper, PinnedNote, Provider, Settings,
+  Annotation, ArxivResult, BookMeta, ChatSession, ChatSessionMeta, Checklist, Exam, Goal, GraphData, ImportBookResult, NoteDetail, Paper, PinnedNote, Provider, Settings,
   Topic, TreeNode, ZoteroCollection, ZoteroConfig, ZoteroSyncResult,
 } from './types'
 
@@ -81,7 +81,7 @@ export const api = {
 
   // 笔记
   note: (path: string) => http<NoteDetail>(`/api/notes?${qs({ path })}`),
-  createNote: (path: string, content = '') => post<NoteDetail>('/api/notes', { path, content }),
+  createNote: (path: string, content = '', overwrite = false) => post<NoteDetail>('/api/notes', { path, content, overwrite }),
   saveNote: (path: string, content: string) => put<NoteDetail>('/api/notes', { path, content }),
   pinned: () => http<{ pinned: PinnedNote[] }>('/api/pinned'),
   setNotePin: (path: string, pinned: boolean) => post<NoteDetail>('/api/notes/pin', { path, pinned }),
@@ -117,6 +117,18 @@ export const api = {
   // 图谱
   graph: (topic?: string) => http<GraphData>(`/api/graph?${qs({ topic })}`),
 
+  // AI 对话
+  chatSessions: () => http<{ sessions: ChatSessionMeta[] }>('/api/chat/sessions'),
+  chatSession: (id: string) => http<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`),
+  createChatSession: (title = '') => post<ChatSession>('/api/chat/sessions', { title }),
+  renameChatSession: (id: string, title: string) =>
+    patch<ChatSession>(`/api/chat/sessions/${encodeURIComponent(id)}`, { title }),
+  deleteChatSession: (id: string) => del<unknown>(`/api/chat/sessions/${encodeURIComponent(id)}`),
+
+  // 笔记追加（对话存入 / AI 工具共用）
+  appendToNote: (path: string, text: string, heading = '') =>
+    post<NoteDetail>('/api/notes/append', { path, text, heading }),
+
   // 考试
   generateExam: (body: { paths: string[]; types: string[]; count: number; difficulty: string; title?: string }) =>
     post<Exam>('/api/exams/generate', { ...body, ...getModelOverride() }),
@@ -151,6 +163,30 @@ export const api = {
     }
     return resp.json() as Promise<NoteDetail & { pages: number }>
   },
+
+  // 读书笔记：书籍导入与梗概生成
+  importBook: async (file: File, topic: string, title = '', author = '') => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('topic', topic)
+    if (title) form.append('title', title)
+    if (author) form.append('author', author)
+    const headers: Record<string, string> = {}
+    const token = localStorage.getItem('nl-token')
+    if (token) headers['X-Notebook-Token'] = token
+    const resp = await fetch('/api/books/import', { method: 'POST', body: form, headers })
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }))
+      throw new Error(data.detail || '导入失败')
+    }
+    return resp.json() as Promise<ImportBookResult>
+  },
+  getBook: (id: string) =>
+    http<{ book: BookMeta; fmt: string; chapters: { title: string; chars: number }[] }>(
+      `/api/books/${encodeURIComponent(id)}`),
+  getBookChapter: (id: string, index: number) =>
+    http<{ title: string; html: string }>(
+      `/api/books/${encodeURIComponent(id)}/chapter/${index}/html`),
   exportVaultUrl:
     '/api/export/vault' +
     (() => {
@@ -266,4 +302,6 @@ export const streamUrls = {
   studyGuide: '/api/llm/study-guide/stream',
   topicArchitecture: '/api/llm/topic-architecture/stream',
   topicGenerateNotes: '/api/llm/topic-architecture/generate-notes/stream',
+  chatTurn: (sessionId: string) => `/api/chat/sessions/${encodeURIComponent(sessionId)}/turn`,
+  bookNotes: (bookId: string) => `/api/books/${encodeURIComponent(bookId)}/notes/stream`,
 }

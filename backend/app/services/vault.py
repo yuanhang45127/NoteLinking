@@ -219,6 +219,15 @@ def set_finished(rel: str, finished: bool) -> Dict:
 
 
 # ---------------------------------------------------------------- 笔记 CRUD
+def is_locked(fm: Dict) -> bool:
+    """笔记是否锁定编辑：AI 生成的（frontmatter generated: true）默认锁定；
+    显式 editable 键优先于 generated（editable: true 解锁 / editable: false 强制锁定）。
+    用户自己导入/新建的笔记没有这两个键，视为可编辑。"""
+    if "editable" in fm:
+        return not bool(fm["editable"])
+    return bool(fm.get("generated"))
+
+
 def read_note(rel: str) -> Dict:
     path = resolve_in(get_vault_dir(), rel)
     if not path.exists() or path.suffix.lower() != ".md":
@@ -233,6 +242,7 @@ def read_note(rel: str) -> Dict:
         "title": fm.get("title") or path.stem,
         "type": "term" if fm.get("type") == "term" else "note",
         "frontmatter": fm,
+        "editable": not is_locked(fm),
         "content": content,
         "updated_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
         "size": stat.st_size,
@@ -251,13 +261,31 @@ def create_note(rel: str, content: str = "", overwrite: bool = False) -> Dict:
     return read_note(path.relative_to(vault).as_posix())
 
 
-def save_note(rel: str, content: str) -> Dict:
+def save_note(rel: str, content: str, _force: bool = False) -> Dict:
+    """整体覆盖保存。AI 生成的笔记（is_locked）默认拒绝编辑；
+    _force 仅供系统内部 AI 写入流程使用（问答存回、词条重生成/追加出处等）。"""
     vault = get_vault_dir()
     path = resolve_in(vault, rel)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"笔记不存在：{rel}")
+    if not _force:
+        fm, _ = parse_frontmatter(_read_text(path))
+        if is_locked(fm):
+            raise HTTPException(
+                status_code=403,
+                detail="该笔记由 AI 生成，已锁定编辑；可整篇「重新生成」，或在 frontmatter 中加 editable: true 解锁",
+            )
     path.write_text(content, encoding="utf-8")
     return read_note(path.relative_to(vault).as_posix())
+
+
+def append_to_note(rel: str, text: str, heading: str = "") -> Dict:
+    """把一段 Markdown 追加到笔记末尾（不动原文），语义与 MCP append_to_note 一致。"""
+    note = read_note(rel)
+    block = text.strip() + "\n"
+    if heading.strip():
+        block = f"\n## {heading.strip()}\n\n" + block
+    return save_note(note["path"], note["content"].rstrip() + "\n\n" + block)
 
 
 def delete_note(rel: str) -> None:
@@ -295,17 +323,21 @@ def search_vault(query: str, topic: str = "", limit: int = 50) -> List[Dict]:
         lower = text.lower()
         rel = p.relative_to(vault).as_posix()
         hit_pos = lower.find(q)
-        if hit_pos < 0:
+        in_title = hit_pos < 0 and q in p.stem.lower()  # 标题/文件名命中也算
+        if hit_pos < 0 and not in_title:
             continue
-        start = max(0, hit_pos - 60)
-        snippet = text[start: hit_pos + len(q) + 80].replace("\n", " ")
+        if in_title:
+            snippet = text.replace("\n", " ")[:140]
+        else:
+            start = max(0, hit_pos - 60)
+            snippet = text[start: hit_pos + len(q) + 80].replace("\n", " ")
         fm, _ = parse_frontmatter(text)
         results.append(
             {
                 "path": rel,
                 "name": p.stem,
                 "title": fm.get("title") or p.stem,
-                "snippet": ("…" if start > 0 else "") + snippet + "…",
+                "snippet": ("…" if (hit_pos >= 0 and start > 0) else "") + snippet + "…",
             }
         )
         if len(results) >= limit:

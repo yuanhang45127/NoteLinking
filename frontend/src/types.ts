@@ -64,6 +64,7 @@ export interface NoteDetail {
   title: string
   type: 'note' | 'term'
   frontmatter: Record<string, any>
+  editable: boolean
   content: string
   updated_at: string
   size: number
@@ -186,11 +187,43 @@ export interface ChatMsg {
   quizSummary?: string
 }
 
+// ---- AI 对话 ----
+export interface ChatToolStep {
+  name: string
+  args: Record<string, any>
+  summary: string
+  ok: boolean
+  /** 流式中刚发起、还没返回结果的步骤 */
+  running?: boolean
+}
+
+export interface ChatSessionMsg {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  created_at?: string
+  tool_steps?: ChatToolStep[]
+}
+
+export interface ChatSessionMeta {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  message_count: number
+}
+
+export interface ChatSession extends ChatSessionMeta {
+  messages: ChatSessionMsg[]
+}
+
 export type PaperStatus = 'unread' | 'reading' | 'done'
 
 export interface Paper {
   id: string
   topic: string
+  /** paper | book（读书笔记的书目） */
+  kind?: 'paper' | 'book'
+  book_id?: string
   title: string
   authors: string[]
   year: string
@@ -222,6 +255,22 @@ export interface ZoteroCollection {
   key: string
   name: string
   num_items: number
+}
+
+// ---- 读书笔记 ----
+export interface BookMeta {
+  id: string
+  title: string
+  author: string
+  topic: string
+  created_at: string
+  meta: { chunked?: boolean; hint?: string; pages?: number }
+}
+
+export interface ImportBookResult {
+  book: BookMeta
+  chapters: { title: string; chars: number }[]
+  paper: Paper | null
 }
 
 export interface ZoteroSyncResult {

@@ -21,6 +21,8 @@ from .config import get_annotations_dir, get_checklists_dir, get_exams_dir, get_
 from .routers import (
     annotations,
     auth,
+    books,
+    chat,
     exams,
     graph,
     importer,
@@ -134,7 +136,9 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(topics.router)
 app.include_router(notes.router)
+app.include_router(chat.router)
 app.include_router(papers.router)
+app.include_router(books.router)
 app.include_router(annotations.router)
 app.include_router(llm.router)
 app.include_router(terms.router)

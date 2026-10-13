@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api, getModelOverride, setModelOverride } from '../api'
 import { useApp } from '../store'
-import { IconBell, IconSearch } from './Icons'
+import { IconBell, IconChat, IconSearch } from './Icons'
+import { chatDock } from './chat/chatDockSignal'
 import type { Provider } from '../types'
 
 export default function TopBar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const { activeTopic, topics } = useApp()
+  const dockOpen = useSyncExternalStore(chatDock.subscribe, chatDock.get)
   const location = useLocation()
   const navigate = useNavigate()
   const params = new URLSearchParams(location.search)
@@ -74,6 +76,13 @@ export default function TopBar({ onToggleSidebar }: { onToggleSidebar?: () => vo
         ))}
       </nav>
       <div className="spacer" />
+      <button
+        className="bell"
+        title={dockOpen ? '收起 AI 对话' : 'AI 对话（侧边面板）'}
+        onClick={() => chatDock.toggle()}
+      >
+        <IconChat />
+      </button>
       <ModelPicker />
       <SearchBox />
       <button className="bell" title="通知"><IconBell /><span className="dot" /></button>

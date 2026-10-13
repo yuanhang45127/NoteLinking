@@ -69,6 +69,8 @@ def add_paper(topic: str, paper: Dict) -> Dict:
     item = {
         "id": uuid.uuid4().hex[:12],
         "topic": topic,
+        "kind": (paper.get("kind") or "paper").strip(),  # paper | book（读书笔记的书目）
+        "book_id": (paper.get("book_id") or "").strip(),
         "title": (paper.get("title") or "").strip(),
         "authors": [str(a).strip() for a in (paper.get("authors") or []) if str(a).strip()],
         "year": (paper.get("year") or "").strip(),
@@ -79,7 +81,7 @@ def add_paper(topic: str, paper: Dict) -> Dict:
         "url": (paper.get("url") or "").strip(),
         "pdf": (paper.get("pdf") or "").strip(),
         "tags": [str(t).strip() for t in (paper.get("tags") or []) if str(t).strip()],
-        "status": "unread",
+        "status": paper.get("status") if paper.get("status") in READ_STATUS else "unread",
         "comment": "",
         "added_at": _now(),
     }

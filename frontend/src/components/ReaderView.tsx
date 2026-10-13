@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, getModelOverride, llmUrls, streamSSE } from '../api'
+import { api, getModelOverride, llmUrls } from '../api'
 import { useApp } from '../store'
 import type { Annotation, NoteDetail } from '../types'
 import { applyHighlights, applyInlineComments, selectionInfo } from '../lib/highlight'
+import { applySelectionEdit, deleteSectionAt } from '../lib/contentEdit'
+import { sendChatReference, sendChatTextRef } from './chat/chatDockSignal'
+import { streamTracked } from '../lib/aiTasks'
 import { renderMarkdown, stripFrontAndH1 } from '../lib/md'
 import type { TocItem } from '../lib/md'
 import Modal from './Modal'
+import BookPane from './BookPane'
 import StreamMd from './StreamMd'
 import TermStreamModal from './TermStreamModal'
+import VoiceNote from './VoiceNote'
 import {
-  IconBulb, IconConcept, IconEdit, IconFilePdf, IconLink, IconList,
+  IconBulb, IconConcept, IconFilePdf, IconLink, IconList,
   IconRefresh, IconSpark, IconWand,
 } from './Icons'
 
@@ -34,9 +39,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
   onRegen?: () => void | Promise<void>
 }) {
   const navigate = useNavigate()
-  const { refreshTree } = useApp()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(note.content)
+  const { refreshTree, setActiveTopic } = useApp()
   const bodyRef = useRef<HTMLDivElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const [toc, setToc] = useState<TocItem[]>([])
@@ -44,11 +47,16 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
 
   // 文献笔记：frontmatter 带 paper_id + pdf_attached 时可分栏展示论文 PDF 原文
   const fm = note.frontmatter || {}
+  // AI 生成的笔记锁定手动编辑（后端在 editable 字段里给出判定，editable 键显式优先于 generated）
+  const locked = note.editable === false
   const hasPdf = !!fm.paper_id && fm.pdf_attached !== undefined && fm.pdf_attached !== false
   const pdfUrl = hasPdf
     ? `/api/papers/${encodeURIComponent(fm.paper_id)}/pdf?topic=${encodeURIComponent(fm.paper_topic || note.topic)}`
     : ''
   const [pdfOpen, setPdfOpen] = useState(hasPdf)
+  // 读书笔记：frontmatter 带 book_id 时可分栏展示原书（EPUB 章节渲染 / PDF 直读）
+  const hasBook = !!fm.book_id
+  const [bookOpen, setBookOpen] = useState(false)
   // 「看完」标记（frontmatter finished）
   const isFinished = !!(note.frontmatter && note.frontmatter.finished)
   const toggleFinished = async () => {
@@ -62,15 +70,18 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
 
   // 弹层
   const [sel, setSel] = useState<{ x: number; y: number; quote: string; prefix: string; suffix: string } | null>(null)
-  const [hover, setHover] = useState<{ x: number; y: number; target: string; found: boolean; summary: string; path: string } | null>(null)
-  const [annMenu, setAnnMenu] = useState<{ x: number; y: number; id: string; comment: string } | null>(null)
+  const [hover, setHover] = useState<{ x: number; y: number; target: string; kind: 'term' | 'note'; found: boolean; summary: string; path: string } | null>(null)
+  const [annMenu, setAnnMenu] = useState<{ x: number; y: number; id: string; comment: string; quote: string; created_at?: string; mode: 'view' | 'edit' } | null>(null)
   const [regenOpen, setRegenOpen] = useState(false)
   const [continueOpen, setContinueOpen] = useState(false)
+  const [voiceOpen, setVoiceOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
   const [termGen, setTermGen] = useState<{ term: string; ctxBefore: string; ctxAfter: string; regenerate: boolean } | null>(null)
+  // 划选直接修改：编辑态时保存待写入的新文本
+  const [selEdit, setSelEdit] = useState<string | null>(null)
   const hoverTimer = useRef<number>()
   const hideTimer = useRef<number>()
 
-  useEffect(() => { setDraft(note.content); setEditing(false) }, [note.path, note.content])
   useEffect(() => { setPdfOpen(hasPdf) }, [note.path, hasPdf]) // 切换笔记时重置 PDF 面板
 
   /* ---------- 渲染 markdown + 自动概念链接 + 高亮 ---------- */
@@ -81,7 +92,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
 
   useEffect(() => {
     const el = bodyRef.current
-    if (!el || editing) return
+    if (!el) return
     const html = renderMarkdown(stripFrontAndH1(note.content))
     const toc: TocItem[] = (renderMarkdown as any).lastToc
     el.innerHTML = html
@@ -106,7 +117,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     const scroller = wrapRef.current?.closest('.page-scroll')
     scroller?.addEventListener('scroll', onScroll)
     return () => scroller?.removeEventListener('scroll', onScroll)
-  }, [note, editing, conceptNames])
+  }, [note, conceptNames])
 
   /* ---------- 划选 → 弹窗 ---------- */
   const onMouseUp = (e: React.MouseEvent) => {
@@ -153,7 +164,22 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     setTermGen({ term, ctxBefore, ctxAfter, regenerate: false })
   }
 
+  /* 划选「加入对话」：选中原文作为行内引用进入 AI 对话面板（chips），随下一轮提问注入 */
+  const addSelToChat = () => {
+    if (!sel) return
+    sendChatTextRef(sel.quote, note.title || note.path)
+    setSel(null)
+    window.getSelection()?.removeAllRanges()
+    toast('已加入 AI 对话引用，直接在面板里提问即可')
+  }
+
   /* ---------- 概念悬浮卡 ---------- */
+  /** 打开一篇普通笔记（跨主题双链跳转时顺带切换左侧主题） */
+  const openNote = (p: string) => {
+    const topic = p.split('/')[0]
+    if (topic && topic !== note.topic) setActiveTopic(topic)
+    navigate(`/notes?path=${encodeURIComponent(p)}`)
+  }
   const onOver = async (e: React.MouseEvent) => {
     const a = (e.target as HTMLElement).closest('a.wikilink') as HTMLElement | null
     if (!a) return
@@ -162,15 +188,19 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     hoverTimer.current = window.setTimeout(async () => {
       const rect = a.getBoundingClientRect()
       const wrap = wrapRef.current!.getBoundingClientRect()
+      const pos = { x: rect.left + rect.width / 2 - wrap.left, y: rect.bottom - wrap.top + 8 }
       try {
         const r = await api.resolveTerm(target, note.topic)
-        setHover({
-          x: rect.left + rect.width / 2 - wrap.left, y: rect.bottom - wrap.top + 8,
-          target, found: r.found, path: r.found ? r.path : '',
-          summary: r.found ? oneLine(r.content) : '该概念还没有解释文档，点击可自动生成。',
-        })
+        if (r.found) {
+          setHover({ ...pos, target, kind: 'term', found: true, path: r.path, summary: oneLine(r.content) })
+          return
+        }
+      } catch { /* 接着按笔记解析 */ }
+      try {
+        const n = await api.resolveLink(target, note.topic)
+        setHover({ ...pos, target, kind: n.type === 'term' ? 'term' : 'note', found: true, path: n.path, summary: oneLine(n.content) })
       } catch {
-        setHover({ x: rect.left + rect.width / 2 - wrap.left, y: rect.bottom - wrap.top + 8, target, found: false, summary: '', path: '' })
+        setHover({ ...pos, target, kind: 'term', found: false, summary: '没有同名笔记或概念文档，点击可生成解释。', path: '' })
       }
     }, 260)
   }
@@ -185,10 +215,19 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     if (a) {
       e.preventDefault()
       const target = a.dataset.target!
-      api.resolveTerm(target, note.topic).then((r) => {
-        if (r.found) onOpenConcept(r.path)
-        else doWhatMean(target)
-      })
+      // 先按概念词条解析，再按普通笔记解析（Obsidian 式笔记间双链），都没有才引导生成概念
+      api.resolveTerm(target, note.topic)
+        .catch(() => ({ found: false, path: '' }))
+        .then(async (r) => {
+          if (r.found) { onOpenConcept(r.path); return }
+          try {
+            const n = await api.resolveLink(target, note.topic)
+            if (n.type === 'term') onOpenConcept(n.path)
+            else openNote(n.path)
+          } catch {
+            doWhatMean(target)
+          }
+        })
       return
     }
     const mark = (e.target as HTMLElement).closest('mark.hl-anchor') as HTMLElement | null
@@ -197,7 +236,11 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
       const ann = note.annotations.find((x) => x.id === id)
       const rect = mark.getBoundingClientRect()
       const wrap = wrapRef.current!.getBoundingClientRect()
-      setAnnMenu({ x: rect.left - wrap.left, y: rect.bottom - wrap.top + 6, id, comment: ann?.comment || '' })
+      setAnnMenu({
+        x: rect.left - wrap.left, y: rect.bottom - wrap.top + 6, id,
+        comment: ann?.comment || '', quote: ann?.quote || '',
+        created_at: ann?.created_at, mode: 'view',
+      })
       setSel(null)
     } else {
       setAnnMenu(null)
@@ -212,15 +255,46 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     if (!annMenu) return
     try {
       await api.updateAnnotation(note.path, annMenu.id, { comment: annMenu.comment })
-      setAnnMenu(null); await reload()
+      setAnnMenu({ ...annMenu, mode: 'view' })
+      await reload()
     } catch (e: any) { toast(e.message, 'err') }
   }
 
-  const saveDraft = async () => {
+  /* ---------- 划选直接修改 / 删除（取代编辑 MD 源码） ---------- */
+  const persistContent = async (next: string | null, okMsg: string) => {
+    if (next === null) { toast('选区跨结构或不在正文中，无法定位，请缩小选择范围', 'err'); return false }
     try {
-      await api.saveNote(note.path, draft)
-      toast('已保存')
+      await api.saveNote(note.path, next)
+      toast(okMsg)
+      setSel(null); setSelEdit(null)
       await reload()
+      return true
+    } catch (e: any) { toast(e.message, 'err'); return false }
+  }
+  const deleteSelection = async () => {
+    if (!sel) return
+    if (!window.confirm(`删除选中的 ${sel.quote.length} 个字？`)) return
+    await persistContent(applySelectionEdit(note.content, sel, ''), '已删除选中内容')
+  }
+  const saveSelectionEdit = async () => {
+    if (!sel || selEdit === null) return
+    if (!selEdit.trim()) { await persistContent(applySelectionEdit(note.content, sel, ''), '内容已清空') ; return }
+    await persistContent(applySelectionEdit(note.content, sel, selEdit), '已修改')
+  }
+  // 高亮弹卡：删除画线对应的原文（连同该批注）
+  const delAnnContent = async () => {
+    if (!annMenu) return
+    const ann = note.annotations.find((x) => x.id === annMenu.id)
+    if (!ann) return
+    if (!window.confirm('删除高亮对应的原文？该批注会一并移除。')) return
+    const next = applySelectionEdit(note.content, { quote: ann.quote, prefix: ann.prefix, suffix: ann.suffix }, '')
+    if (next === null) { toast('没能在正文中定位该段内容', 'err'); return }
+    try {
+      await api.saveNote(note.path, next)
+      await api.deleteAnnotation(note.path, ann.id)
+      setAnnMenu(null)
+      await reload()
+      toast('已删除对应内容')
     } catch (e: any) { toast(e.message, 'err') }
   }
 
@@ -229,6 +303,17 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
   }
   const scrollToToc = (id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  // 目录操作：删除整节 / 引用为 AI chunk
+  const deleteTocSection = async (t: TocItem, order: number) => {
+    if (!window.confirm(`删除「${t.text}」整节（标题与内容）？此操作会写入笔记源码。`)) return
+    const next = deleteSectionAt(note.content, order)
+    if (next === null) { toast('没能在正文中定位该章节', 'err'); return }
+    try {
+      await api.saveNote(note.path, next)
+      toast('已删除该章节')
+      await reload()
+    } catch (e: any) { toast(e.message, 'err') }
   }
 
   const styleLabel = (s: string) => (s === 'font' ? '字体高亮' : '背景高亮')
@@ -242,13 +327,25 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
           <h1 className="note-title">{note.title}</h1>
           <div className="note-head-bar">
             <div className="note-meta">
-              {note.frontmatter.generated && <span className="ai-badge"><IconSpark size={14} /> AI 生成</span>}
+              {locked ? (
+                <span className="ai-badge" title="AI 生成的笔记不可手动编辑，可整篇「重新生成」">
+                  <IconSpark size={14} /> AI 生成 · 不可编辑
+                </span>
+              ) : note.frontmatter.generated && (
+                <span className="ai-badge"><IconSpark size={14} /> AI 生成</span>
+              )}
               {note.type === 'term' && <span className="tag">概念解释</span>}
               {isFinished && <span className="tag finish-badge">✅ 已看完</span>}
               <span>更新于 {note.updated_at.replace('T', ' ')}</span>
               {!!note.backlinks.length && <span>· 被 {note.backlinks.length} 篇笔记引用</span>}
             </div>
             <div className="note-actions">
+              {!locked && (
+                <button className="btn" title="说话实时转文字，追加到当前章节"
+                  onClick={() => setVoiceOpen(true)}>
+                  🎙 语音速记
+                </button>
+              )}
               <button className={`btn ${isFinished ? 'done' : ''}`}
                 title={isFinished ? '点击取消「已看完」标记' : '这篇笔记看完了，标记一下'}
                 onClick={toggleFinished}>
@@ -260,45 +357,60 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
                   <IconFilePdf size={15} /> {pdfOpen ? '收起原文' : 'PDF 原文'}
                 </button>
               )}
+              {hasBook && (
+                <button className="btn" title="分栏展示原书内容（EPUB 按章节渲染 / PDF 直读），边读边写笔记"
+                  onClick={() => setBookOpen((v) => !v)}>
+                  📖 {bookOpen ? '收起原书' : '原书对照'}
+                </button>
+              )}
+              {!locked && (
+                <button className="btn" title="编辑 Markdown 源码"
+                  onClick={() => setEditOpen(true)}>
+                  ✏️ 编辑
+                </button>
+              )}
               <button className="btn" onClick={() => (onRegen ? onRegen() : setRegenOpen(true))}>
                 <IconRefresh size={15} /> 重新生成
-              </button>
-              <button className="btn primary" onClick={() => setEditing((v) => !v)}>
-                <IconEdit size={15} /> {editing ? '退出编辑' : '编辑 MD 源码'}
               </button>
             </div>
           </div>
         </div>
 
         {/* 正文 */}
-        {editing ? (
-          <div>
-            <textarea className="text-input" style={{ width: '100%', minHeight: 480, lineHeight: 1.8 }}
-              value={draft} onChange={(e) => setDraft(e.target.value)} />
-            <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-              <button className="btn primary" onClick={saveDraft}>保存</button>
-              <button className="btn" onClick={() => { setEditing(false); setDraft(note.content) }}>取消</button>
-            </div>
-          </div>
-        ) : (
-          <div
-            ref={bodyRef}
-            className="md-body"
-            onMouseUp={onMouseUp}
-            onMouseOver={onOver}
-            onMouseOut={onOut}
-            onClick={onBodyClick}
-          />
-        )}
+        <div
+          ref={bodyRef}
+          className="md-body"
+          onMouseUp={onMouseUp}
+          onMouseOver={onOver}
+          onMouseOut={onOut}
+          onClick={onBodyClick}
+        />
 
         {/* 划选弹窗 */}
         {sel && (
           <div className="sel-popover" style={{ left: sel.x, top: sel.y, transform: 'translateX(-50%)' }}>
-            <div className="hint">已选中 {sel.quote.length} 个字 · 上下文将一并发送给 AI</div>
-            <div className="btns">
-              <button className="btn primary" onClick={() => doWhatMean()}>什么意思</button>
-              <button className="btn" onClick={doHighlight}>高亮</button>
-            </div>
+            {selEdit !== null ? (
+              <>
+                <div className="hint">直接修改选中的内容</div>
+                <textarea className="text-input" style={{ width: 260, minHeight: 60, marginTop: 6 }} autoFocus
+                  value={selEdit} onChange={(e) => setSelEdit(e.target.value)} />
+                <div className="btns" style={{ marginTop: 8 }}>
+                  <button className="btn primary small" onClick={saveSelectionEdit}>保存修改</button>
+                  <button className="btn small" onClick={() => setSelEdit(null)}>取消</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="hint">已选中 {sel.quote.length} 个字 · 上下文将一并发送给 AI</div>
+                <div className="btns">
+                  <button className="btn primary" onClick={() => doWhatMean()}>什么意思</button>
+                  <button className="btn" onClick={doHighlight}>高亮</button>
+                  <button className="btn" onClick={addSelToChat}>加入对话</button>
+                  {!locked && <button className="btn" onClick={() => setSelEdit(sel.quote)}>修改</button>}
+                  {!locked && <button className="btn" style={{ color: 'var(--err)' }} onClick={deleteSelection}>删除</button>}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -308,16 +420,16 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
             onMouseEnter={() => window.clearTimeout(hideTimer.current)}
             onMouseLeave={() => setHover(null)}>
             <div className="hc-head">
-              <IconConcept size={16} />
+              {hover.kind === 'note' ? <IconLink size={16} /> : <IconConcept size={16} />}
               {hover.target}
-              <span className="hc-badge">概念</span>
+              <span className="hc-badge">{hover.kind === 'note' ? '笔记' : '概念'}</span>
             </div>
             {hover.found ? (
               <>
                 <div className="hc-body">{hover.summary}</div>
                 <div className="hc-link">
-                  <button className="btn text" style={{ padding: 0 }} onClick={() => { setHover(null); onOpenConcept(hover.path) }}>
-                    查看完整文档 →
+                  <button className="btn text" style={{ padding: 0 }} onClick={() => { setHover(null); if (hover.kind === 'note') openNote(hover.path); else onOpenConcept(hover.path) }}>
+                    {hover.kind === 'note' ? '打开笔记 →' : '查看完整文档 →'}
                   </button>
                 </div>
               </>
@@ -332,19 +444,42 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
           </div>
         )}
 
-        {/* 批注菜单 */}
+        {/* 批注弹卡：点高亮直接显示批注信息，编辑时切换输入态 */}
         {annMenu && (
-          <div className="hover-card" style={{ left: annMenu.x, top: annMenu.y, transform: 'translateX(-30%)', width: 280 }}>
+          <div className="hover-card" style={{ left: annMenu.x, top: annMenu.y, transform: 'translateX(-30%)', width: 300 }}>
             <div className="hc-head" style={{ fontSize: 13.5 }}>我的批注</div>
-            <textarea className="text-input" style={{ width: '100%', marginTop: 8, minHeight: 64 }}
-              placeholder="记录此刻的想法..."
-              value={annMenu.comment}
-              onChange={(e) => setAnnMenu({ ...annMenu, comment: e.target.value })} />
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button className="btn small primary" onClick={saveAnnComment}>保存</button>
-              <button className="btn small" onClick={() => setAnnMenu(null)}>取消</button>
-              <button className="btn small" style={{ color: 'var(--err)', marginLeft: 'auto' }} onClick={() => delAnn(annMenu.id)}>删除</button>
-            </div>
+            {annMenu.quote && (
+              <div className="ann-quote">「{annMenu.quote.length > 80 ? annMenu.quote.slice(0, 80) + '…' : annMenu.quote}」</div>
+            )}
+            {annMenu.mode === 'view' ? (
+              <>
+                {annMenu.comment
+                  ? <div className="ann-comment">{annMenu.comment}</div>
+                  : <div className="ann-comment empty">这条高亮还没有批注</div>}
+                <div style={{ display: 'flex', gap: 6, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button className="btn small primary" onClick={() => setAnnMenu({ ...annMenu, mode: 'edit' })}>
+                    {annMenu.comment ? '编辑批注' : '写批注'}
+                  </button>
+                  {!locked && (
+                    <button className="btn small" title="把画线对应的原文从笔记中删除" onClick={delAnnContent}>删除内容</button>
+                  )}
+                  <button className="btn small" style={{ color: 'var(--err)', marginLeft: 'auto' }} onClick={() => delAnn(annMenu.id)}>删除批注</button>
+                </div>
+                {annMenu.created_at && <div className="ann-time">{annMenu.created_at.replace('T', ' ')} 创建</div>}
+              </>
+            ) : (
+              <>
+                <textarea className="text-input" style={{ width: '100%', marginTop: 8, minHeight: 64 }}
+                  placeholder="记录此刻的想法..." autoFocus
+                  value={annMenu.comment}
+                  onChange={(e) => setAnnMenu({ ...annMenu, comment: e.target.value })} />
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  <button className="btn small primary" onClick={saveAnnComment}>保存</button>
+                  <button className="btn small" onClick={() => setAnnMenu({ ...annMenu, mode: 'view' })}>取消</button>
+                  <button className="btn small" style={{ color: 'var(--err)', marginLeft: 'auto' }} onClick={() => delAnn(annMenu.id)}>删除</button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -361,9 +496,26 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
           />
         )}
 
+        {/* 语音速记 */}
+        {voiceOpen && (
+          <VoiceNote
+            path={note.path}
+            content={note.content}
+            sectionTitle={toc.find((t) => t.id === curHeading)?.text || toc[0]?.text || null}
+            onSaved={reload}
+            onClose={() => setVoiceOpen(false)}
+            toast={toast}
+          />
+        )}
+
         {/* 重新生成 */}
         {regenOpen && (
           <RegenModal note={note} onClose={() => setRegenOpen(false)} onDone={async () => { setRegenOpen(false); await reload() }} toast={toast} />
+        )}
+
+        {/* 编辑 Markdown 源码（仅未锁定笔记） */}
+        {editOpen && (
+          <SourceEditModal note={note} onClose={() => setEditOpen(false)} onDone={async () => { setEditOpen(false); await reload() }} toast={toast} />
         )}
 
         {/* AI 续写本节 */}
@@ -380,8 +532,13 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
             <a className="btn text small" href={pdfUrl} target="_blank" rel="noreferrer">新窗口打开</a>
             <button className="btn text small" onClick={() => setPdfOpen(false)}>收起</button>
           </div>
-          <iframe className="pdf-frame" src={pdfUrl} title="论文 PDF 原文" />
+          <iframe className="pdf-frame" src={pdfUrl} title="论文 PDF" />
         </div>
+      )}
+
+      {/* 读书笔记的原书对照分栏 */}
+      {bookOpen && hasBook && (
+        <BookPane bookId={fm.book_id} fmt={fm.book_fmt || 'epub'} onClose={() => setBookOpen(false)} />
       )}
 
       {/* ---------------- 右栏 ---------------- */}
@@ -426,11 +583,16 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
           <div className="rail-title"><IconList size={16} /> 本页目录</div>
           {toc.length ? (
             <div className="toc-list">
-              {toc.map((t) => (
-                <button key={t.id} className={t.id === curHeading ? 'cur' : ''}
-                  style={{ paddingLeft: t.level === 3 ? 20 : 8 }} onClick={() => scrollToToc(t.id)}>
-                  {t.text}
-                </button>
+              {toc.map((t, i) => (
+                <div key={t.id} className={`toc-row ${t.id === curHeading ? 'cur' : ''}`}
+                  style={{ paddingLeft: t.level === 3 ? 20 : 8 }}>
+                  <button className="toc-text" onClick={() => scrollToToc(t.id)}>{t.text}</button>
+                  <span className="toc-ops">
+                    <button title="在 AI 对话中引用本节（chunk）"
+                      onClick={() => { sendChatReference(`${note.path}#${t.text}`); toast('已加入 AI 对话引用') }}>💬</button>
+                    {!locked && <button title="删除本节（标题与内容）" onClick={() => deleteTocSection(t, i)}>🗑</button>}
+                  </span>
+                </div>
               ))}
             </div>
           ) : <div className="rail-empty">暂无小节标题</div>}
@@ -441,9 +603,11 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
           <button className="quick-item" onClick={() => document.getElementById('nl-pdf-input')?.click()}>
             <IconFilePdf size={17} /> 导入 PDF <small>自动转为文本笔记</small>
           </button>
-          <button className="quick-item" onClick={() => setContinueOpen(true)}>
-            <IconWand size={17} /> AI 续写本节内容
-          </button>
+          {!locked && (
+            <button className="quick-item" onClick={() => setContinueOpen(true)}>
+              <IconWand size={17} /> AI 续写本节内容
+            </button>
+          )}
           <input id="nl-pdf-input" type="file" accept="application/pdf" style={{ display: 'none' }}
             onChange={async (e) => {
               const f = e.target.files?.[0]
@@ -507,36 +671,71 @@ function oneLine(content: string): string {
   return t.length > 90 ? t.slice(0, 90) + '…' : t
 }
 
+/* ---------- 编辑 Markdown 源码弹窗（AI 生成笔记锁定，不提供入口） ---------- */
+function SourceEditModal({ note, onClose, onDone, toast }: { note: NoteDetail; onClose: () => void; onDone: () => void; toast: any }) {
+  const [text, setText] = useState(note.content)
+  const dirty = text !== note.content
+  return (
+    <Modal title={`编辑源码 · ${note.title}`} onClose={onClose} wide
+      ops={
+        <>
+          <button className="btn primary" style={{ marginRight: 'auto' }} disabled={!dirty}
+            onClick={async () => {
+              try {
+                await api.saveNote(note.path, text)
+                toast('已保存')
+                onDone()
+              } catch (e: any) { toast(e.message, 'err') }
+            }}>保存</button>
+          <button className="btn" onClick={onClose}>取消</button>
+        </>
+      }>
+      <textarea className="text-input" style={{ width: '100%', minHeight: 440, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, lineHeight: 1.65 }}
+        value={text} onChange={(e) => setText(e.target.value)} autoFocus />
+    </Modal>
+  )
+}
+
 /* ---------- 重新生成弹窗 ---------- */
 function RegenModal({ note, onClose, onDone, toast }: { note: NoteDetail; onClose: () => void; onDone: () => void; toast: any }) {
   const [prompt, setPrompt] = useState(`请围绕「${note.title}」重写本篇笔记：结构更清晰，保留原文的公式与概念链接。`)
   const [text, setText] = useState('')
   const [running, setRunning] = useState(false)
+  const [bg, setBg] = useState(false)
+  const ctrlRef = useRef<{ abort: () => void } | null>(null)
   const start = () => {
     setRunning(true); setText('')
-    streamSSE(llmUrls.generateNote, {
-      topic: note.topic, prompt, title: note.title, stream: true, ...getModelOverride(),
-    }, (t) => setText((s) => s + t),
-      () => setRunning(false),
-      (msg) => { setRunning(false); toast(msg, 'err') })
+    ctrlRef.current = streamTracked(
+      { title: `重写笔记 · ${note.title}`, kind: 'note', foreground: () => setBg(false) },
+      llmUrls.generateNote, {
+        topic: note.topic, prompt, title: note.title, stream: true, ...getModelOverride(),
+      },
+      {
+        onDelta: (t) => setText((s) => s + t),
+        onDone: () => setRunning(false),
+        onError: (msg) => { setRunning(false); toast(msg, 'err') },
+      })
   }
+  if (bg) return null
   return (
-    <Modal title="重新生成笔记" onClose={onClose} wide
+    <Modal title="重新生成笔记" onClose={() => { ctrlRef.current?.abort(); onClose() }} wide
       ops={
         <>
           {!running && !text && <button className="btn primary" style={{ marginRight: 'auto' }} onClick={start}>开始生成</button>}
+          {running && <button className="btn" style={{ marginRight: 'auto' }} title="收起弹窗，生成继续在右下角悬浮窗里跑" onClick={() => setBg(true)}>后台</button>}
           {text && (
             <button className="btn primary" disabled={running} style={{ marginRight: 'auto' }} onClick={async () => {
               try {
                 const { stripFrontAndH1 } = await import('../lib/md')
-                await api.saveNote(note.path, note.content.startsWith('---')
+                // 重新生成属于 AI 整篇替换：走覆盖创建，绕开生成笔记的编辑锁
+                await api.createNote(note.path, note.content.startsWith('---')
                   ? note.content.slice(0, note.content.indexOf('---', 3) + 4) + '\n\n' + text + '\n'
-                  : `# ${note.title}\n\n` + text + '\n')
+                  : `# ${note.title}\n\n` + text + '\n', true)
                 toast('已替换正文'); onDone()
               } catch (e: any) { toast(e.message, 'err') }
             }}>应用并保存</button>
           )}
-          <button className="btn" onClick={onClose}>关闭</button>
+          <button className="btn" onClick={() => { ctrlRef.current?.abort(); onClose() }}>关闭</button>
         </>
       }>
       <div className="form-row">
@@ -556,22 +755,31 @@ function RegenModal({ note, onClose, onDone, toast }: { note: NoteDetail; onClos
 function ContinueModal({ note, onClose, onDone, toast }: { note: NoteDetail; onClose: () => void; onDone: () => void; toast: any }) {
   const [text, setText] = useState('')
   const [running, setRunning] = useState(true)
+  const [bg, setBg] = useState(false)
+  const ctrlRef = useRef<{ abort: () => void } | null>(null)
   useEffect(() => {
     const tail = note.content.slice(-1500)
-    const ctrl = streamSSE(llmUrls.chat, {
-      messages: [
-        { role: 'system', content: '你是学习笔记作者。根据笔记已有内容自然续写，输出 Markdown 正文，公式用 LaTeX，不要重复已有内容。' },
-        { role: 'user', content: `请续写笔记《${note.title}》的下一节内容。已有内容结尾如下：\n\n...${tail}` },
-      ],
-      stream: true, ...getModelOverride(),
-    }, (t) => setText((s) => s + t),
-      () => setRunning(false),
-      (msg) => { setRunning(false); toast(msg, 'err') })
-    return () => ctrl.abort()
+    const t = streamTracked(
+      { title: `续写笔记 · ${note.title}`, kind: 'note', foreground: () => setBg(false) },
+      llmUrls.chat, {
+        messages: [
+          { role: 'system', content: '你是学习笔记作者。根据笔记已有内容自然续写，输出 Markdown 正文，公式用 LaTeX，不要重复已有内容。' },
+          { role: 'user', content: `请续写笔记《${note.title}》的下一节内容。已有内容结尾如下：\n\n...${tail}` },
+        ],
+        stream: true, ...getModelOverride(),
+      },
+      {
+        onDelta: (x) => setText((s) => s + x),
+        onDone: () => setRunning(false),
+        onError: (msg) => { setRunning(false); toast(msg, 'err') },
+      })
+    ctrlRef.current = t
+    return () => t.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  if (bg) return null
   return (
-    <Modal title="AI 续写本节内容" onClose={onClose} wide
+    <Modal title="AI 续写本节内容" onClose={() => { ctrlRef.current?.abort(); onClose() }} wide
       ops={
         <>
           <button className="btn primary" style={{ marginRight: 'auto' }} disabled={running || !text}
@@ -581,7 +789,8 @@ function ContinueModal({ note, onClose, onDone, toast }: { note: NoteDetail; onC
                 toast('已追加到笔记'); onDone(); onClose()
               } catch (e: any) { toast(e.message, 'err') }
             }}>追加到笔记</button>
-          <button className="btn" onClick={onClose}>关闭</button>
+          {running && <button className="btn" title="收起弹窗，生成继续在右下角悬浮窗里跑" onClick={() => setBg(true)}>后台</button>}
+          <button className="btn" onClick={() => { ctrlRef.current?.abort(); onClose() }}>关闭</button>
         </>
       }>
       <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`}>

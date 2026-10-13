@@ -185,7 +185,7 @@ async def ask(body: AskRequest):
             if body.save_to_note:
                 heading = f"问答记录（{datetime.datetime.now().isoformat(timespec='seconds')}）"
                 qa = f"**问：** {body.question.strip() or '讲解选中内容'}\n\n> {body.selected_text.strip()}\n\n**答：**\n\n{''.join(buf).strip()}"
-                saved = vault.save_note(body.path, append_section(note["content"], heading, qa))
+                saved = vault.save_note(body.path, append_section(note["content"], heading, qa), _force=True)
                 yield {"type": "done", "saved_path": saved["path"]}
                 return
             yield {"type": "done"}
@@ -196,7 +196,7 @@ async def ask(body: AskRequest):
     result: Dict = {"text": text}
     if body.save_to_note:
         heading = f"问答记录（{datetime.datetime.now().isoformat(timespec='seconds')}）"
-        saved = vault.save_note(body.path, append_section(note["content"], heading, text))
+        saved = vault.save_note(body.path, append_section(note["content"], heading, text), _force=True)
         result["saved_path"] = saved["path"]
     return result
 
@@ -228,7 +228,8 @@ async def study_guide(body: StudyGuideRequest):
     md = await generate_study_guide(body.paths, body.language, body.provider or "", body.model or "")
     result = {"markdown": md}
     if body.save_path:
-        saved = vault.create_note(body.save_path, md, overwrite=False)
+        fm = {"generated": True, "created": datetime.date.today().isoformat()}
+        saved = vault.create_note(body.save_path, ensure_frontmatter(md, fm), overwrite=False)
         result["saved_path"] = saved["path"]
     return result
 
@@ -331,7 +332,8 @@ async def study_guide_stream(body: StudyGuideRequest):
             yield {"type": "delta", "text": delta}
         done: Dict = {"type": "done", "markdown": "".join(buf)}
         if body.save_path:
-            saved = vault.create_note(body.save_path, done["markdown"], overwrite=False)
+            fm = {"generated": True, "created": datetime.date.today().isoformat()}
+            saved = vault.create_note(body.save_path, ensure_frontmatter(done["markdown"], fm), overwrite=False)
             done["saved_path"] = saved["path"]
         yield done
 
