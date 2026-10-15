@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, getModelOverride, llmUrls } from '../api'
 import { useApp } from '../store'
-import type { NoteDetail, TreeNode } from '../types'
+import type { NoteDetail, Settings, TreeNode } from '../types'
 import ReaderView from '../components/ReaderView'
 import Modal from '../components/Modal'
 import StreamMd from '../components/StreamMd'
@@ -99,6 +99,7 @@ export default function NotesPage() {
       {genTopic && (
         <GenerateModal
           topic={genTopic}
+          settings={settings}
           onClose={() => setParams(path ? { path } : {}, { replace: true })}
           onCreated={async (p) => {
             await Promise.all([refreshTree(), refreshTopics()])
@@ -129,8 +130,9 @@ function openAiGenerate(navigate: any, topic: string) {
 }
 
 /* ---------- 首篇笔记 AI 生成弹窗（?generate=主题） ---------- */
-function GenerateModal({ topic, onClose, onCreated, toast }: {
+function GenerateModal({ topic, settings, onClose, onCreated, toast }: {
   topic: string
+  settings: Settings | null
   onClose: () => void
   onCreated: (path: string) => void
   toast: (t: string, k?: 'ok' | 'err') => void
@@ -140,6 +142,7 @@ function GenerateModal({ topic, onClose, onCreated, toast }: {
   const [text, setText] = useState('')
   const [running, setRunning] = useState(false)
   const [bg, setBg] = useState(false)
+  const [useWeb, setUseWeb] = useState(false)
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
   // 后台期间完成时暂存结果，回到前台再交付（避免在用户看别的页面时突然跳转）
   const pendingRef = useRef('')
@@ -164,6 +167,7 @@ function GenerateModal({ topic, onClose, onCreated, toast }: {
       llmUrls.generateNote, {
         topic, prompt: prompt.trim(), title: safeTitle, stream: true,
         save_path: `${topic}/${safeTitle}.md`,
+        use_web: useWeb,
         ...getModelOverride(),
       },
       {
@@ -210,6 +214,14 @@ function GenerateModal({ topic, onClose, onCreated, toast }: {
           value={prompt} disabled={running || !!text}
           onChange={(e) => setPrompt(e.target.value)} />
       </div>
+      {settings?.web_search?.enabled && (
+        <label className="check-row" style={{ cursor: 'pointer', marginBottom: 10 }}>
+          <input type="checkbox" checked={useWeb} disabled={running || !!text}
+            onChange={(e) => setUseWeb(e.target.checked)} />
+          联网搜索
+          <span style={{ color: 'var(--muted)', fontSize: 12.5 }}>允许 AI 检索网络获取最新信息</span>
+        </label>
+      )}
       {(text || running) && (
         <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`} style={{ marginTop: 6 }}>
           <StreamMd text={text} streaming={running} />

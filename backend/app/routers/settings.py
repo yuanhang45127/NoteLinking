@@ -1,9 +1,13 @@
-"""设置路由：模型服务商（支持当前所有主流接口）、高亮偏好、考试默认值。"""
+"""设置路由：模型服务商（支持当前所有主流接口）、高亮偏好、考试默认值、联网搜索、MCP 服务器。"""
+import uuid
+
 from fastapi import APIRouter, HTTPException
 
 from ..schemas import ActiveProviderIn, ExamSettingsIn, HighlightIn, ProviderIn, ProvidersIn
+from ..services import mcp_client
 from ..services.llm_service import SUPPORTED_TYPES
 from ..services.settings_store import (
+    MASK,
     load_settings,
     mask_settings,
     merge_provider_secret,
@@ -96,3 +100,69 @@ def put_kimi_web(body: dict):
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="port 需为 1-65535 的整数")
     return mask_settings(update_settings("kimi_web", updates))
+
+
+@router.put("/web-search")
+def put_web_search(body: dict):
+    allowed = {"enabled", "provider", "api_key", "base_url", "max_results", "mcp_server", "mcp_tool"}
+    updates = {k: v for k, v in (body or {}).items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail=f"无有效字段，允许：{', '.join(sorted(allowed))}")
+    if "max_results" in updates:
+        try:
+            updates["max_results"] = max(1, min(int(updates["max_results"]), 20))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="max_results 需为 1-20 的整数")
+    # 前端带回的可能是打码值/空串：沿用已保存的真实 key（与服务商列表一致的处理）
+    if updates.get("api_key") in ("", MASK):
+        updates["api_key"] = (load_settings().get("web_search") or {}).get("api_key", "")
+    return mask_settings(update_settings("web_search", updates))
+
+
+def _merge_mcp_env_secrets(incoming: dict, existing: dict) -> dict:
+    """保存 MCP server 的 env：值为空或打码值时沿用已保存的真实值（与服务商列表一致）。"""
+    old = existing.get("env") if isinstance(existing.get("env"), dict) else {}
+    out = {}
+    for k, v in (incoming.get("env") or {}).items():
+        if v in ("", MASK):
+            v = old.get(k, "")
+        out[str(k)] = "" if v is None else str(v)
+    return out
+
+
+@router.put("/mcp-servers")
+def put_mcp_servers(body: dict):
+    """保存外部 MCP 服务器列表（stdio）：command 必填、id 唯一（缺省生成）。"""
+    servers = (body or {}).get("mcp_servers") if isinstance(body, dict) else None
+    if not isinstance(servers, list):
+        raise HTTPException(status_code=400, detail='请求体应为 {"mcp_servers": [...]}')
+    s = load_settings()
+    old_by_id = {srv.get("id"): srv for srv in (s.get("mcp_servers") or [])
+                 if isinstance(srv, dict)}
+    cleaned, seen = [], set()
+    for srv in servers:
+        if not isinstance(srv, dict):
+            raise HTTPException(status_code=400, detail="MCP server 配置格式不正确")
+        command = str(srv.get("command") or "").strip()
+        if not command:
+            raise HTTPException(status_code=400, detail="每个 MCP server 都必须填写 command（启动命令）")
+        sid = str(srv.get("id") or "").strip() or uuid.uuid4().hex[:8]
+        if sid in seen:
+            raise HTTPException(status_code=400, detail=f"MCP server id 重复：{sid}")
+        seen.add(sid)
+        args = srv.get("args") or []
+        if isinstance(args, str):  # 容忍逗号分隔的一行
+            args = [a.strip() for a in args.split(",") if a.strip()]
+        entry = {
+            "id": sid,
+            "name": str(srv.get("name") or "").strip(),
+            "command": command,
+            "args": [str(a) for a in args],
+            "env": _merge_mcp_env_secrets(srv, old_by_id.get(sid) or {}),
+            "enabled": bool(srv.get("enabled", True)),
+        }
+        cleaned.append(entry)
+    s["mcp_servers"] = cleaned
+    save_settings(s)
+    mcp_client.invalidate()
+    return mask_settings(s)

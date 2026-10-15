@@ -22,7 +22,6 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class Credentials(BaseModel):
     username: str
     password: str
-    claim_existing: bool = False
     email: str = ""
     code: str = ""
 
@@ -79,7 +78,7 @@ def email_code(body: dict):
 
 @router.post("/register")
 def register(body: Credentials, request: Request, response: Response):
-    """注册新用户并直接登录。首位注册者可勾选接管旧版单人数据（users/default）。
+    """注册新用户并直接登录。新用户从零开始，不会接管 default 的数据。
 
     开启邮箱验证（NOTELINK_EMAIL_VERIFY=1 且 SMTP 已配置）时，必须提供
     email + 刚收到的验证码；同一邮箱只能绑定一个账号。
@@ -97,7 +96,7 @@ def register(body: Credentials, request: Request, response: Response):
                                 request.headers.get("x-real-ip", ""))
     if not auth_service.register_allowed(ip):
         raise HTTPException(status_code=429, detail="注册太频繁，请稍后再试")
-    result = auth_service.register_user(body.username, body.password, body.claim_existing, email)
+    result = auth_service.register_user(body.username, body.password, email)
     auth_service.record_register(ip)
     _issue_session(response, result["username"])
     return result

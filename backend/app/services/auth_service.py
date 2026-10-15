@@ -152,9 +152,8 @@ def email_taken(email: str) -> bool:
     return any((u.get("email") or "").lower() == email for u in _load_users())
 
 
-def register_user(username: str, password: str, claim_existing: bool = False,
-                  email: str = "") -> Dict:
-    """注册新用户。首一个注册者可勾选接管旧版单人数据（users/default）。
+def register_user(username: str, password: str, email: str = "") -> Dict:
+    """注册新用户。每个用户从零开始（空 vault），不会接管 default 的数据。
 
     返回 {"username": ...}；失败抛 HTTPException。
     """
@@ -172,15 +171,6 @@ def register_user(username: str, password: str, claim_existing: bool = False,
     if any(u["username"] == username for u in users):
         raise HTTPException(status_code=409, detail=f"用户名已被注册：{username}")
 
-    # 接管旧数据：users.json 为空且存在 default 数据目录
-    migrated_from = None
-    if claim_existing and not users:
-        default_dir = get_users_root() / "default"
-        target_dir = get_users_root() / username
-        if default_dir.exists() and username != "default" and not target_dir.exists():
-            default_dir.rename(target_dir)
-            migrated_from = "default"
-
     user_dir = get_users_root() / username
     (user_dir / "vault").mkdir(parents=True, exist_ok=True)
 
@@ -195,8 +185,6 @@ def register_user(username: str, password: str, claim_existing: bool = False,
         }
     )
     _save_users(users)
-    if migrated_from:
-        return {"username": username, "claimed_existing": True}
     return {"username": username}
 
 

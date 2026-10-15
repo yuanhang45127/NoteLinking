@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { useApp } from '../store'
-import type { Provider, Settings } from '../types'
+import type { McpServer, Provider, Settings } from '../types'
 import Modal from '../components/Modal'
 import { IconDownload, IconEdit, IconFilePdf, IconPlus, IconTrash } from '../components/Icons'
 
@@ -11,6 +11,8 @@ const TABS = [
   { key: 'topics', label: '主题管理' },
   { key: 'reader', label: '阅读与高亮' },
   { key: 'model', label: 'AI 模型' },
+  { key: 'web', label: '联网搜索' },
+  { key: 'mcp', label: 'MCP 服务器' },
   { key: 'graph', label: '双链与图谱' },
   { key: 'kimi', label: 'Kimi Code' },
   { key: 'io', label: '导入与导出' },
@@ -33,6 +35,8 @@ export default function SettingsPage() {
       <div className="settings-panel">
         {tab === 'reader' && <ReaderPanel />}
         {tab === 'model' && <ModelPanel />}
+        {tab === 'web' && <WebSearchPanel />}
+        {tab === 'mcp' && <McpPanel />}
         {tab === 'graph' && <GraphPanel />}
         {tab === 'kimi' && <KimiPanel />}
         {tab === 'io' && <IoPanel />}
@@ -332,6 +336,270 @@ function ModelPanel() {
         setProviders((ps) => [...ps, { id: `provider-${Date.now()}`, type: 'openai', name: '', base_url: '', api_key: '', model: '' }])
         setDirty(true)
       }}><IconPlus size={15} /> 添加服务商</button>
+
+      <SaveBar dirty={dirty} onSave={save} />
+    </div>
+  )
+}
+
+/* ---------------- 联网搜索 ---------------- */
+function WebSearchPanel() {
+  const { settings, refreshSettings, toast } = useApp()
+  const [ws, setWs] = useState<Settings['web_search']>(
+    { enabled: false, provider: 'tavily', api_key: '', base_url: '', max_results: 5, mcp_server: '', mcp_tool: '' })
+  const [dirty, setDirty] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testTitles, setTestTitles] = useState<string[]>([])
+  useEffect(() => {
+    if (!settings?.web_search) return
+    const w = settings.web_search
+    setWs({ ...w, api_key: w.has_key ? MASK : '' })
+  }, [settings])
+
+  const save = async () => {
+    try { await api.saveWebSearch(ws); await refreshSettings(); setDirty(false); toast('已保存') }
+    catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const test = async () => {
+    setTesting(true)
+    setTestTitles([])
+    try {
+      const r = await api.webSearch('NoteLink 笔记')
+      setTestTitles(r.results.slice(0, 3).map((x) => x.title))
+      if (!r.results.length) toast('搜索成功，但没有结果')
+    } catch (e: any) { toast(e.message, 'err') }
+    setTesting(false)
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>联网搜索</h3>
+      <div className="desc">
+        开启后，AI 生成笔记、重新生成与备考助教对话里会出现「联网搜索」选项：勾选后 AI 会先检索网络再作答，适合获取最新信息。
+        API Key 留空表示不修改。
+      </div>
+      <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div>
+          <div className="sl-text">启用联网搜索</div>
+          <div className="sl-sub">未开启时各处的「联网搜索」选项不会出现</div>
+        </div>
+        <Toggle checked={ws.enabled} onChange={(v) => { setWs({ ...ws, enabled: v }); setDirty(true) }} />
+      </div>
+      <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div>
+          <div className="sl-text">搜索服务商</div>
+          <div className="sl-sub">Tavily / Brave / Serper 需申请 API Key；SearXNG 用自建实例、无需 Key；MCP 用「MCP 服务器」里配置的外部搜索工具</div>
+        </div>
+        <select className="select-input" value={ws.provider}
+          onChange={(e) => { setWs({ ...ws, provider: e.target.value }); setDirty(true) }}>
+          <option value="tavily">Tavily</option>
+          <option value="brave">Brave</option>
+          <option value="serper">Serper</option>
+          <option value="searxng">SearXNG</option>
+          <option value="mcp">MCP 服务器</option>
+        </select>
+      </div>
+      {ws.provider === 'mcp' && (
+        <>
+          <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+            <div>
+              <div className="sl-text">MCP 服务器 id</div>
+              <div className="sl-sub">「设置 → MCP 服务器」里已配置并启用的服务器 id（在其「检测」结果旁查看）</div>
+            </div>
+            <input className="text-input" style={{ width: 240 }} value={ws.mcp_server || ''} placeholder="如 a1b2c3d4"
+              onChange={(e) => { setWs({ ...ws, mcp_server: e.target.value }); setDirty(true) }} />
+          </div>
+          <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+            <div>
+              <div className="sl-text">搜索工具名</div>
+              <div className="sl-sub">该 MCP 服务器提供的搜索工具（用「MCP 服务器」页的「检测」查看工具列表）</div>
+            </div>
+            <input className="text-input" style={{ width: 240 }} value={ws.mcp_tool || ''} placeholder="如 web_search"
+              onChange={(e) => { setWs({ ...ws, mcp_tool: e.target.value }); setDirty(true) }} />
+          </div>
+        </>
+      )}
+      {ws.provider !== 'mcp' && (
+        <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div>
+            <div className="sl-text">API Key {ws.has_key && <span style={{ color: 'var(--ok)' }}>（已配置）</span>}</div>
+            <div className="sl-sub">SearXNG 无需 Key；留空表示不修改</div>
+          </div>
+          <input className="text-input" style={{ width: 240 }} type="password" value={ws.api_key}
+            placeholder={ws.has_key ? '••••••（未修改）' : '未配置'}
+            onChange={(e) => { setWs({ ...ws, api_key: e.target.value }); setDirty(true) }} />
+        </div>
+      )}
+      {ws.provider === 'searxng' && (
+        <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div>
+            <div className="sl-text">SearXNG 实例地址</div>
+            <div className="sl-sub">自建或公共实例的 Base URL，如 https://searx.be</div>
+          </div>
+          <input className="text-input" style={{ width: 240 }} value={ws.base_url} placeholder="https://..."
+            onChange={(e) => { setWs({ ...ws, base_url: e.target.value }); setDirty(true) }} />
+        </div>
+      )}
+      <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div>
+          <div className="sl-text">每次搜索返回结果数</div>
+          <div className="sl-sub">1-20 条，越多越占用 AI 上下文</div>
+        </div>
+        <input className="text-input" style={{ width: 90 }} type="number" min={1} max={20} value={ws.max_results}
+          onChange={(e) => { setWs({ ...ws, max_results: Math.max(1, Math.min(20, Number(e.target.value) || 5)) }); setDirty(true) }} />
+      </div>
+      <div className="setting-line">
+        <div>
+          <div className="sl-text">测试搜索</div>
+          <div className="sl-sub">用示例关键词跑一次搜索，验证配置是否可用（未保存的改动不会生效，需先保存）</div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <button className="btn small" disabled={testing} onClick={test}>
+            {testing ? '搜索中...' : '测试搜索'}
+          </button>
+          {!!testTitles.length && (
+            <div className="sl-sub" style={{ textAlign: 'right' }}>
+              {testTitles.map((t) => <div key={t}>· {t}</div>)}
+            </div>
+          )}
+        </div>
+      </div>
+      <SaveBar dirty={dirty} onSave={save} />
+    </div>
+  )
+}
+
+/* ---------------- 外部 MCP 服务器 ---------------- */
+function McpPanel() {
+  const { settings, refreshSettings, toast } = useApp()
+  const [servers, setServers] = useState<McpServer[]>([])
+  const [dirty, setDirty] = useState(false)
+  const [probe, setProbe] = useState<Record<number, { tools?: number; error?: string }>>({})
+  const [busy, setBusy] = useState<number>(-1)
+  const [form, setForm] = useState({ name: '', command: '', args: '', env: '' })
+
+  useEffect(() => {
+    if (settings) setServers(settings.mcp_servers || [])
+  }, [settings])
+
+  const save = async () => {
+    try {
+      await api.saveMcpServers(servers)
+      await refreshSettings()
+      setDirty(false)
+      setProbe({})
+      toast('已保存')
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const update = (i: number, patch: Partial<McpServer>) => {
+    setServers((ss) => ss.map((s, j) => (j === i ? { ...s, ...patch } : s)))
+    setDirty(true)
+  }
+
+  const add = () => {
+    const command = form.command.trim()
+    if (!command) { toast('请填写启动命令', 'err'); return }
+    const env: Record<string, string> = {}
+    for (const line of form.env.split('\n')) {
+      const idx = line.indexOf('=')
+      if (idx > 0) env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+    }
+    setServers((ss) => [...ss, {
+      id: `mcp-${Date.now().toString(36)}`,
+      name: form.name.trim() || command,
+      command,
+      args: form.args.split(',').map((a) => a.trim()).filter(Boolean),
+      env,
+      enabled: true,
+    }])
+    setForm({ name: '', command: '', args: '', env: '' })
+    setDirty(true)
+  }
+
+  /** 检测连接：先保存（后端只认已保存的配置），再拉工具列表 */
+  const test = async (i: number) => {
+    setBusy(i)
+    try {
+      if (dirty) await save()
+      const r = await api.mcpServers()
+      const s = servers[i]
+      const entry = r.servers.find((x) => x.command === s.command && x.name === s.name)
+      if (!entry) setProbe((p) => ({ ...p, [i]: { error: '未在已保存的服务器里找到该项，请检查后重试' } }))
+      else if (entry.error) setProbe((p) => ({ ...p, [i]: { error: entry.error } }))
+      else setProbe((p) => ({ ...p, [i]: { tools: entry.tools.length } }))
+    } catch (e: any) {
+      setProbe((p) => ({ ...p, [i]: { error: e.message } }))
+    }
+    setBusy(-1)
+  }
+
+  return (
+    <div className="settings-card">
+      <h3>MCP 服务器</h3>
+      <div className="desc">
+        连接外部 stdio MCP server（如 web search MCP），供联网搜索与 AI 对话使用。
+        命令在 NoteLink 后端所在机器上执行，请只添加可信的服务器。
+      </div>
+
+      {servers.map((s, i) => (
+        <div className="setting-line" key={s.id || i} style={{ borderBottom: '1px solid var(--border)' }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="sl-text">
+              {s.name || s.command}
+              <span className="tag" style={{ marginLeft: 8 }}>{s.enabled ? '已启用' : '已停用'}</span>
+            </div>
+            <div className="sl-sub" title={`${s.command} ${(s.args || []).join(' ')}`.trim()}
+              style={{ maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {s.command}{(s.args || []).length ? ` ${s.args.join(' ')}` : ''}
+            </div>
+            {probe[i]?.error && <div className="sl-sub" style={{ color: 'var(--err)' }}>{probe[i].error}</div>}
+            {probe[i]?.tools !== undefined && (
+              <div className="sl-sub" style={{ color: 'var(--ok)' }}>连接成功：{probe[i].tools} 个工具</div>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: 'none' }}>
+            <Toggle checked={s.enabled} onChange={(v) => update(i, { enabled: v })} />
+            <button className="btn small" disabled={busy === i} onClick={() => test(i)}>
+              {busy === i ? '检测中…' : '检测'}
+            </button>
+            <button className="btn small" style={{ color: 'var(--err)' }}
+              onClick={() => { setServers((ss) => ss.filter((_, j) => j !== i)); setDirty(true) }}>
+              <IconTrash size={14} />
+            </button>
+          </div>
+        </div>
+      ))}
+      {!servers.length && <div className="sl-sub">还没有配置 MCP 服务器。</div>}
+
+      <div className="field-label">添加服务器</div>
+      <div className="provider-grid">
+        <div>
+          <label>名称（可选，缺省用命令）</label>
+          <input className="text-input" value={form.name} placeholder="如 web search"
+            onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </div>
+        <div>
+          <label>启动命令 *</label>
+          <input className="text-input" value={form.command} placeholder="如 npx、uvx、python 或可执行文件路径"
+            onChange={(e) => setForm({ ...form, command: e.target.value })} />
+        </div>
+        <div>
+          <label>参数（逗号分隔）</label>
+          <input className="text-input" value={form.args} placeholder="-y, some-search-mcp"
+            onChange={(e) => setForm({ ...form, args: e.target.value })} />
+        </div>
+      </div>
+      <div style={{ marginTop: 10, maxWidth: 520 }}>
+        <label style={{ fontSize: 12, color: 'var(--muted)', display: 'block', marginBottom: 5 }}>
+          环境变量（每行 KEY=VALUE；含 KEY/TOKEN 的值保存后打码）
+        </label>
+        <textarea className="text-input" style={{ width: '100%', minHeight: 72 }} value={form.env}
+          placeholder={'API_KEY=sk-...\nHTTPS_PROXY=http://127.0.0.1:7890'}
+          onChange={(e) => setForm({ ...form, env: e.target.value })} />
+      </div>
+      <button className="btn" style={{ marginTop: 10 }} onClick={add}><IconPlus size={15} /> 添加服务器</button>
 
       <SaveBar dirty={dirty} onSave={save} />
     </div>

@@ -75,24 +75,22 @@ def test_multi_user_isolation(client):
     assert names == ["艾丽丝的笔记"]
 
 
-def test_first_user_can_claim_legacy_data(data_dir):
-    # 模拟旧版单人数据：data/vault 直接存在
-    legacy = data_dir / "vault" / "高数"
-    legacy.mkdir(parents=True)
-    (legacy / "极限.md").write_text("# 极限", encoding="utf-8")
+def test_register_cannot_claim_existing_data(data_dir):
+    # 即使请求带 claim_existing，注册也不再接管 default 的数据
+    default_vault = data_dir / "users" / "default" / "vault" / "高数"
+    default_vault.mkdir(parents=True)
+    (default_vault / "极限.md").write_text("# 极限", encoding="utf-8")
 
-    with TestClient(app) as c:  # lifespan 执行迁移
-        assert c.get("/api/auth/status").json()["mode"] == "open"
+    with TestClient(app) as c:
         r = c.post(
             "/api/auth/register",
             json={"username": "lorry", "password": "secret1", "claim_existing": True},
         )
-        assert r.status_code == 200 and r.json()["claimed_existing"] is True
-        names = [t["name"] for t in c.get("/api/topics").json()["topics"]]
-        assert names == ["高数"]
-
-    assert not (data_dir / "vault").exists()
-    assert (data_dir / "users" / "lorry" / "vault" / "高数" / "极限.md").exists()
+        assert r.status_code == 200 and "claimed_existing" not in r.json()
+        # default 数据原地不动，新用户是空库
+        assert (data_dir / "users" / "default" / "vault" / "高数" / "极限.md").exists()
+        assert not (data_dir / "users" / "lorry" / "vault" / "高数").exists()
+        assert c.get("/api/topics").json()["topics"] == []
 
 
 def test_migration_merges_into_empty_default(data_dir):

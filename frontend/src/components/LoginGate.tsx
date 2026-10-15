@@ -5,7 +5,6 @@ import { LogoMark } from './Icons'
 /** 登录 / 注册门：多用户模式下未登录时全屏展示。开启邮箱验证时注册需验证码。 */
 export default function LoginGate({ onOk }: { onOk: (username: string) => void }) {
   const [tab, setTab] = useState<'login' | 'register'>('login')
-  const [firstUser, setFirstUser] = useState(false) // 还是没人注册（首位注册者可接管旧数据）
   const [emailVerify, setEmailVerify] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -13,7 +12,6 @@ export default function LoginGate({ onOk }: { onOk: (username: string) => void }
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
   const [cooldown, setCooldown] = useState(0) // 发送验证码倒计时
-  const [claim, setClaim] = useState(true)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -28,8 +26,8 @@ export default function LoginGate({ onOk }: { onOk: (username: string) => void }
     setErr('')
     if (t === 'register') {
       api.authStatus()
-        .then((s) => { setFirstUser(s.mode === 'open'); setEmailVerify(!!s.email_verify) })
-        .catch(() => setFirstUser(false))
+        .then((s) => setEmailVerify(!!s.email_verify))
+        .catch(() => {})
     }
   }
 
@@ -60,7 +58,7 @@ export default function LoginGate({ onOk }: { onOk: (username: string) => void }
     try {
       const r = tab === 'login'
         ? await api.login(name, password)
-        : await api.register(name, password, claim, email.trim(), code.trim())
+        : await api.register(name, password, email.trim(), code.trim())
       onOk(r.username)
     } catch (e: any) {
       setErr(e.message || '出错了，请重试')
@@ -144,12 +142,6 @@ export default function LoginGate({ onOk }: { onOk: (username: string) => void }
               onChange={(e) => setConfirm(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && submit()}
             />
-            {firstUser && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--muted)', margin: '10px 0 0' }}>
-                <input type="checkbox" checked={claim} onChange={(e) => setClaim(e.target.checked)} />
-                接管此服务器上已有的笔记与设置
-              </label>
-            )}
           </>
         )}
 

@@ -28,15 +28,18 @@ from .routers import (
     importer,
     integrations,
     llm,
+    mcp,
     misc,
     notes,
     papers,
     settings,
     terms,
     topics,
+    web,
 )
-from .services import auth_service
+from .services import auth_service, mcp_client
 from .services.llm_service import LLMError
+from .services.websearch_service import WebSearchError
 
 
 @asynccontextmanager
@@ -48,12 +51,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     get_exams_dir()
     get_checklists_dir()
     yield
+    mcp_client.shutdown_all()
 
 
 app = FastAPI(
     title="NoteLink API",
     description="基于 Markdown 的 AI 笔记系统：笔记（生成/高亮/概念双链）、知识图谱、考试备考。多人可用。",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -148,12 +152,20 @@ app.include_router(exams.router)
 app.include_router(importer.router)
 app.include_router(settings.router)
 app.include_router(integrations.router)
+app.include_router(mcp.router)
 app.include_router(misc.router)
+app.include_router(web.router)
 
 
 @app.exception_handler(LLMError)
 async def llm_error_handler(request, exc: LLMError):
     """模型调用失败统一返回 502，便于前端提示。"""
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+
+@app.exception_handler(WebSearchError)
+async def websearch_error_handler(request, exc: WebSearchError):
+    """联网搜索/抓取失败统一返回 502，便于前端提示。"""
     return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 

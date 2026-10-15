@@ -44,6 +44,9 @@ Base URL：`http://127.0.0.1:8000`（Swagger UI：`/docs`）
 | GET | `/api/notes/backlinks?path=` | 反链列表 |
 | GET | `/api/notes/resolve-link?target=&topic=` | 解析 `[[双链]]` 目标（悬浮预览/跳转） |
 | GET | `/api/search?q=&topic=&limit=` | 全文搜索 |
+| GET | `/api/notes/links?path=` | 笔记的参考链接列表（frontmatter `links`：`[{title, url, added_at, source}]`） |
+| POST | `/api/notes/links` | 添加参考链接 `{path, title?, url, source?}`；url 须含 `://`，已存在则去重（可补全标题） |
+| POST | `/api/notes/links/remove` | 按 url 删除参考链接 `{path, url}`；不存在返回 404 |
 
 ## 高亮标注（想法默认高亮；样式跟随设置）
 
@@ -62,10 +65,12 @@ Base URL：`http://127.0.0.1:8000`（Swagger UI：`/docs`）
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/llm/chat` | 通用对话 `{messages, provider?, model?, temperature?, stream}` |
-| POST | `/api/llm/generate-note` | 生成笔记 `{topic, prompt, title?, language, stream, save_path?}`；正文大模型产出，LaTeX 用 `$…$` |
+| POST | `/api/llm/generate-note` | 生成笔记 `{topic, prompt, title?, language, stream, save_path?, use_web?}`；正文大模型产出，LaTeX 用 `$…$`；`use_web=true` 时先联网搜索并把结果注入 prompt，落盘后把正文用到的来源回填为笔记参考链接（`source: web_search`） |
 | POST | `/api/llm/ask` | 选中提问 `{path, selected_text, question?, context_before?, context_after?, stream, save_to_note?}` |
-| POST | `/api/llm/tutor-chat` | 备考 AI 助教：`{paths, messages, stream}`，自动把勾选资料注入上下文（流式） |
-| POST | `/api/llm/study-guide` | 学习指南 `{paths, language, save_path?}`（返回 markdown） |
+| POST | `/api/llm/tutor-chat` | 备考 AI 助教：`{paths, messages, stream, use_web?}`，自动把勾选资料注入上下文（流式） |
+| POST | `/api/llm/study-guide` | 学习指南 `{paths, language, save_path?, use_web?}`（返回 markdown） |
+| POST | `/api/llm/study-guide/stream` | 学习指南流式（SSE），同样支持 `use_web` |
+| POST | `/api/llm/topic-architecture/stream` | 主题整体架构（SSE）`{topic, goal?, use_web?}` |
 
 ## 词条（双链解释文档）
 
@@ -125,6 +130,30 @@ Base URL：`http://127.0.0.1:8000`（Swagger UI：`/docs`）
 | PUT | `/api/settings/graph` | `{default_filter, show_missing}` |
 | PUT | `/api/settings/exam` | `{default_count, types, difficulty}` |
 | PUT | `/api/settings/kimi-web` | `{enabled, port}`：侧边对话嵌入本机 Kimi Code Web（默认关闭，多用户部署慎开） |
+| PUT | `/api/settings/web-search` | `{enabled, provider, api_key, base_url, max_results, mcp_server?, mcp_tool?}`：联网搜索配置；`api_key` 传空或打码值则保留旧 key；`provider: "mcp"` 时填 `mcp_server`（MCP 服务器 id）与 `mcp_tool`（工具名） |
+| PUT | `/api/settings/mcp-servers` | 覆盖保存外部 MCP 服务器列表 `{mcp_servers: [{id?, name, command, args?, env?, enabled?}]}`；`command` 必填、`id` 唯一（缺省生成 uuid hex[:8]）；env 中键名含 `KEY`/`TOKEN` 的值 GET 时打码，保存时传打码值则保留旧值 |
+
+## 联网搜索
+
+需先在 `PUT /api/settings/web-search` 启用并配置服务商（`provider`: `tavily` / `brave` / `serper` / `searxng` / `mcp`；前三者填 `api_key`，searxng 填实例 `base_url`，mcp 填 `mcp_server` + `mcp_tool`，见下文「MCP 客户端」）。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/web/search?q=&max_results=` | 联网搜索 → `{provider, results: [{title, url, snippet}]}` |
+| POST | `/api/web/fetch` | 抓取网页正文 `{url}` → `{title, url, text}`（仅 HTML，正文截断 8000 字） |
+
+未启用/缺 key/HTTP 错误等统一返回 `502 {"detail": "…"}`。AI 对话（chat agent）另有 `web_search` / `fetch_webpage` / `mcp_tool` / `add_note_link` 四个白名单工具可直接调用。
+
+## MCP 客户端（外部 stdio MCP server）
+
+NoteLink 作为 MCP 客户端连接用户配置的外部 stdio MCP server（典型：web search MCP），供 `provider: "mcp"` 的联网搜索与 AI 对话 `mcp_tool` 工具使用。传输为标准 MCP stdio：每行一条 JSON-RPC 2.0 消息，握手 `initialize` → `notifications/initialized` → `tools/list`，工具调用 `tools/call`（result 形如 `{"content": [{"type": "text", "text": "..."}], "isError": false}`）。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/mcp/servers` | 已配置的全部 server：`{servers: [{id, name, command, enabled, tools, error}]}`；连不上的记 `error`、`tools` 为 `[]` |
+| POST | `/api/mcp/call` | 调用工具 `{server, tool, arguments?}` → `{result}`（原样返回 MCP result，含 `isError`）；server 不存在/未启用/连接失败返回 `400` |
+
+进程按 server id 缓存复用，调用串行；空闲超过 10 分钟自动回收，调用超时（默认 60s）重置连接，服务关闭时统一清理子进程。`mcp` 搜索档会解析工具返回文本中的 JSON（整体 JSON 或首个 `{…}`/`[…]`，取 `results`/`organic`/`data` 列表字段）并统一为 `{title, url, snippet}`。
 
 ## 外部工具集成
 

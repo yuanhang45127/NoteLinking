@@ -31,6 +31,15 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     # 侧边 AI 对话嵌入本机 Kimi Code Web（kimi web）：默认关闭（开启后登录者
     # 可获得本机 kimi web 访问，仅建议单人本地部署打开）
     "kimi_web": {"enabled": False, "port": 58627},
+    # 外部 MCP 服务器（stdio）：元素形如
+    # {"id": "a1b2c3d4", "name": "web search", "command": "npx",
+    #  "args": ["-y", "some-search-mcp"], "env": {"API_KEY": "..."}, "enabled": true}
+    # 供联网搜索 provider=mcp 与 AI 对话 mcp_tool 工具调用
+    "mcp_servers": [],
+    # 联网搜索：provider 支持 tavily / brave / serper / searxng / mcp；searxng 填 base_url，
+    # mcp 填 mcp_server（服务器 id）与 mcp_tool（工具名），其余填 api_key
+    "web_search": {"enabled": False, "provider": "tavily", "api_key": "", "base_url": "", "max_results": 8,
+                   "mcp_server": "", "mcp_tool": ""},
     "language": "zh",
 }
 
@@ -86,6 +95,17 @@ def mask_settings(s: Dict[str, Any]) -> Dict[str, Any]:
         key = p.get("api_key") or ""
         p["api_key"] = MASK if key else ""
         p["has_key"] = bool(key)
+    ws = out.get("web_search")
+    if isinstance(ws, dict):
+        key = ws.get("api_key") or ""
+        ws["api_key"] = MASK if key else ""
+        ws["has_key"] = bool(key)
+    for srv in out.get("mcp_servers", []):
+        env = srv.get("env")
+        if isinstance(env, dict):
+            # env 里键名含 KEY / TOKEN 的视为密钥，值打码（保存时按 id 沿用旧值）
+            srv["env"] = {k: (MASK if ("KEY" in k.upper() or "TOKEN" in k.upper()) and v else v)
+                          for k, v in env.items()}
     return out
 
 

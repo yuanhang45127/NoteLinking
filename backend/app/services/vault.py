@@ -218,6 +218,60 @@ def set_finished(rel: str, finished: bool) -> Dict:
     return _set_fm_flag(rel, "finished", finished)
 
 
+# ---------------------------------------------------------------- 参考链接
+def list_note_links(rel: str) -> List[Dict]:
+    """笔记的参考链接列表（frontmatter links，[{title, url, added_at, source}]）。"""
+    note = read_note(rel)
+    raw = note["frontmatter"].get("links")
+    if not isinstance(raw, list):
+        return []
+    return [x for x in raw if isinstance(x, dict) and x.get("url")]
+
+
+def add_note_link(rel: str, title: str, url: str, source: str = "manual") -> Dict:
+    """给笔记添加参考链接（写 frontmatter links）；url 已存在则去重，可补全标题。"""
+    note = read_note(rel)
+    url = (url or "").strip()
+    if not url or "://" not in url:
+        raise HTTPException(status_code=400, detail="链接地址不合法（需是含 :// 的完整 URL）")
+    title = (title or "").strip()
+    path = resolve_in(get_vault_dir(), note["path"])
+    fm, body = parse_frontmatter(_read_text(path))
+    links = fm.get("links")
+    if not isinstance(links, list):
+        links = []
+    for item in links:
+        if isinstance(item, dict) and item.get("url") == url:
+            if title and not str(item.get("title") or "").strip():
+                item["title"] = title
+                path.write_text(build_frontmatter(fm) + body, encoding="utf-8")
+            return {"links": links}
+    links.append(
+        {"title": title or url, "url": url, "added_at": datetime.date.today().isoformat(),
+         "source": source or "manual"}
+    )
+    fm["links"] = links
+    path.write_text(build_frontmatter(fm) + body, encoding="utf-8")
+    return {"links": links}
+
+
+def remove_note_link(rel: str, url: str) -> Dict:
+    """按 url 删除参考链接；不存在返回 404。"""
+    note = read_note(rel)
+    url = (url or "").strip()
+    path = resolve_in(get_vault_dir(), note["path"])
+    fm, body = parse_frontmatter(_read_text(path))
+    links = fm.get("links")
+    if not isinstance(links, list):
+        links = []
+    kept = [x for x in links if not (isinstance(x, dict) and x.get("url") == url)]
+    if len(kept) == len(links):
+        raise HTTPException(status_code=404, detail=f"链接不存在：{url}")
+    fm["links"] = kept
+    path.write_text(build_frontmatter(fm) + body, encoding="utf-8")
+    return {"links": kept}
+
+
 # ---------------------------------------------------------------- 笔记 CRUD
 def is_locked(fm: Dict) -> bool:
     """笔记是否锁定编辑：AI 生成的（frontmatter generated: true）默认锁定；

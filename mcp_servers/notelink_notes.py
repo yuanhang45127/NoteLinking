@@ -227,6 +227,26 @@ def delete_annotation(path, annotation_id):
     return api_delete(f"/api/annotations/{annotation_id}", path=path)
 
 
+# ---------------------------------------------------------------- 参考链接
+
+@server.tool("add_note_link", "给笔记添加一条参考链接（写入笔记 frontmatter 的 links 列表，按 url 去重）。", {
+    "path": P(STR, "笔记路径"),
+    "url": P(STR, "网页地址（http/https）"),
+    "title": P(STR, "链接标题，缺省用 url"),
+    "source": P(STR, "来源标记：manual / web_search / ai，默认 manual"),
+}, ["path", "url"])
+def add_note_link(path, url, title="", source="manual"):
+    return api_post("/api/notes/links", {"path": path, "url": url, "title": title, "source": source})
+
+
+@server.tool("remove_note_link", "按 url 删除笔记的一条参考链接。", {
+    "path": P(STR, "笔记路径"),
+    "url": P(STR, "要删除的链接地址"),
+}, ["path", "url"])
+def remove_note_link(path, url):
+    return api_post("/api/notes/links/remove", {"path": path, "url": url})
+
+
 # ---------------------------------------------------------------- 导入导出
 
 @server.tool("import_pdf", "导入本地 PDF：提取文本生成 md 笔记（扫描件不支持，≤50MB）。", {

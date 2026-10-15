@@ -4,7 +4,7 @@
 运行：python3 notelink_ai.py（stdio MCP）
 """
 from nl_mcp import (
-    ARR_STR, BOOL, NUM, STR, MCPServer, MESSAGE_ITEM, P, api_post, health_tool,
+    ARR_STR, BOOL, NUM, STR, MCPServer, MESSAGE_ITEM, P, api_get, api_post, health_tool,
     main, sse_collect,
 )
 
@@ -106,6 +106,23 @@ def topic_architecture(topic, goal="", save_path=""):
 }, ["topic"])
 def scaffold_topic(topic):
     return api_post("/api/llm/topic-architecture/scaffold", {"topic": topic})
+
+
+@server.tool("web_search", "联网搜索最新资料（在 NoteLink「设置 → 联网搜索」配置搜索服务后可用），"
+                           "返回标题/链接/摘要列表，可用于给笔记补充最新内容。", {
+    "q": P(STR, "搜索关键词"),
+    "max_results": P(NUM, "返回条数，默认 8"),
+}, ["q"])
+def web_search(q, max_results=8):
+    return api_get("/api/web/search", q=q, max_results=int(max_results))
+
+
+@server.tool("fetch_webpage", "抓取网页正文（提取标题与可读文本，约 8000 字内），"
+                              "配合 web_search 把搜到的网页内容写进笔记。", {
+    "url": P(STR, "网页地址（http/https）"),
+}, ["url"])
+def fetch_webpage(url):
+    return api_post("/api/web/fetch", {"url": url})
 
 
 if __name__ == "__main__":

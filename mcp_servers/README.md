@@ -5,10 +5,10 @@
 
 | 服务器 | 文件 | 工具数 | 职责 |
 | --- | --- | --- | --- |
-| `notelink-notes` | notelink_notes.py | 26 | 主题/目录树、笔记增删改查、搜索、反链、双链解析、置顶、高亮批注、PDF 导入、全库导出 |
+| `notelink-notes` | notelink_notes.py | 28 | 主题/目录树、笔记增删改查、搜索、反链、双链解析、置顶、高亮批注、参考链接、PDF 导入、全库导出 |
 | `notelink-knowledge` | notelink_knowledge.py | 7 | 概念词条（查询/AI 生成）、知识图谱、局部邻域、主题规模统计 |
 | `notelink-exam` | notelink_exam.py | 14 | AI 出卷、交卷判分、考点清单与掌握度、备考目标 |
-| `notelink-ai` | notelink_ai.py | 8 | 通用对话、生成笔记落库、选段提问、备考助教、学习指南、主题整体架构 |
+| `notelink-ai` | notelink_ai.py | 10 | 通用对话、生成笔记落库、选段提问、备考助教、学习指南、主题整体架构、联网搜索、网页抓取 |
 | `notelink-papers` | notelink_papers.py | 13 | 论文库管理、arXiv 检索、Zotero 同步、PDF 抓取与转笔记 |
 
 每个服务器都带 `health` 工具用于测连通；`nl_mcp.py` 是共享运行时（stdio JSON-RPC + HTTP 客户端），勿单独运行。

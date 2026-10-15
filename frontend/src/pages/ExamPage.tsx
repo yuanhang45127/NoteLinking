@@ -15,7 +15,7 @@ import {
 const TYPE_LABEL: Record<string, string> = { mcq: '选择题', short: '简答题', flashcard: '闪卡' }
 
 export default function ExamPage() {
-  const { activeTopic, tree, refreshTree, toast } = useApp()
+  const { activeTopic, tree, refreshTree, settings, toast } = useApp()
   const navigate = useNavigate()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [goals, setGoals] = useState<Goal[]>([])
@@ -25,6 +25,7 @@ export default function ExamPage() {
   ])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [useWeb, setUseWeb] = useState(false)
   const [quiz, setQuiz] = useState<{ exam: Exam; label: string } | null>(null)
   const [cards, setCards] = useState<Question[] | null>(null)
   const [guideOpen, setGuideOpen] = useState<string | null>(null)
@@ -123,7 +124,7 @@ export default function ExamPage() {
     setBusy(true)
     setMessages((m) => [...m, { role: 'assistant', content: '' }])
     streamTracked({ title: `备考助教 · ${text.slice(0, 16)}${text.length > 16 ? '…' : ''}`, kind: 'tutor', foreground: () => navigate('/exam') },
-      llmUrls.tutorChat, { paths: selectedPaths, messages: [...messages, { role: 'user', content: text }].slice(-10).map((x) => ({ role: x.role, content: x.content })), stream: true, ...getModelOverride() },
+      llmUrls.tutorChat, { paths: selectedPaths, messages: [...messages, { role: 'user', content: text }].slice(-10).map((x) => ({ role: x.role, content: x.content })), stream: true, use_web: useWeb, ...getModelOverride() },
       {
         onDelta: (t) => setMessages((m) => { const c = [...m]; c[c.length - 1] = { ...c[c.length - 1], content: c[c.length - 1].content + t }; return c }),
         onDone: () => setBusy(false),
@@ -282,6 +283,12 @@ export default function ExamPage() {
         {quiz && <QuizRunner key={quiz.exam.id} exam={quiz.exam} label={quiz.label} onClose={() => setQuiz(null)} toast={toast} />}
 
         <div className="chat-input-row">
+          {settings?.web_search?.enabled && (
+            <label className="check-row" style={{ cursor: 'pointer', flex: 'none', fontSize: 13 }}>
+              <input type="checkbox" checked={useWeb} onChange={(e) => setUseWeb(e.target.checked)} />
+              联网搜索
+            </label>
+          )}
           <input placeholder="向 AI 提问，或让它出题、划重点、生成学习指南..." value={input}
             onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} />
           <button className="btn primary" onClick={send} disabled={busy || !input.trim()}><IconSend size={16} /></button>

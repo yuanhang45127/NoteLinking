@@ -17,7 +17,7 @@ from ..schemas import (
     AskRequest, ChatRequest, GenerateNoteRequest, StudyGuideRequest,
     TopicArchitectureRequest, TopicScaffoldRequest, TutorChatRequest,
 )
-from ..services import vault
+from ..services import vault, websearch_service
 from ..services.llm_service import LLMError, complete, stream_llm
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
@@ -52,6 +52,13 @@ def _msg_list(messages: List[Dict]) -> List[Dict]:
         role = m.role if m.role in ("system", "user", "assistant") else "user"
         out.append({"role": role, "content": m.content})
     return out
+
+
+def _note_topic_query(paths: List[str]) -> str:
+    """由笔记路径提取主题词作联网搜索 query（去掉目录与 .md 后缀）。"""
+    names = [p.rsplit("/", 1)[-1] for p in paths]
+    query = " ".join(n[:-3] if n.lower().endswith(".md") else n for n in names)
+    return query.strip()[:100]
 
 
 @router.get("/models")
@@ -110,6 +117,8 @@ NOTE_SYSTEM = (
     "不要用代码围栏包住全文）。要求：结构清晰（用 ## 分节）、重点突出、"
     "数学公式用 LaTeX（行内 $...$、独立 $$...$$）、代码用代码块、"
     "关键术语首次出现可用 [[术语]] 双链语法标注。"
+    "若用户开启联网搜索，可适当补充资料中的最新进展，并在文末用 `## 参考来源` 小节"
+    "以 Markdown 列表列出用到的来源 URL。"
 )
 
 
@@ -121,6 +130,11 @@ async def generate_note(body: GenerateNoteRequest):
         (f"笔记标题：《{title}》\n" if title else "")
         + f"请围绕以下要求写一篇{lang}学习笔记：\n\n{body.prompt}"
     )
+    web_results: List[Dict] = []
+    if body.use_web and websearch_service.is_enabled():
+        web_results, block = await websearch_service.search_and_block(f"{title} {body.prompt}".strip())
+        if block:
+            user += block
     messages = [
         {"role": "system", "content": NOTE_SYSTEM + f"全文使用{lang}。"},
         {"role": "user", "content": user},
@@ -133,7 +147,9 @@ async def generate_note(body: GenerateNoteRequest):
                 buf.append(delta)
                 yield {"type": "delta", "text": delta}
             if body.save_path:
-                saved = _save_generated(title or body.prompt[:30], "".join(buf), body.save_path, body.language)
+                text = "".join(buf)
+                saved = _save_generated(title or body.prompt[:30], text, body.save_path, body.language)
+                _backfill_web_links(saved["path"], text, web_results)
                 yield {"type": "done", "saved_path": saved["path"]}
                 return
             yield {"type": "done"}
@@ -144,6 +160,7 @@ async def generate_note(body: GenerateNoteRequest):
     result = {"text": text}
     if body.save_path:
         saved = _save_generated(title or body.prompt[:30], text, body.save_path, body.language)
+        _backfill_web_links(saved["path"], text, web_results)
         result["saved_path"] = saved["path"]
     return result
 
@@ -152,6 +169,17 @@ def _save_generated(title: str, text: str, save_path: str, language: str) -> Dic
     fm = {"title": title.strip() or "未命名笔记", "generated": True, "created": datetime.date.today().isoformat()}
     content = ensure_frontmatter(f"# {fm['title']}\n", fm) + text.strip() + "\n"
     return vault.create_note(save_path, content, overwrite=False)
+
+
+def _backfill_web_links(saved_path: str, text: str, web_results: List[Dict]) -> None:
+    """生成正文里用到的搜索来源，回填为笔记参考链接（frontmatter links）；失败不影响生成。"""
+    for r in web_results:
+        url = r.get("url") or ""
+        if url and url in text:
+            try:
+                vault.add_note_link(saved_path, r.get("title") or url, url, source="web_search")
+            except Exception:  # noqa: BLE001
+                pass
 
 
 ASK_SYSTEM = (
@@ -212,6 +240,11 @@ async def tutor_chat(body: TutorChatRequest):
         f"你是学生的备考 AI 助教。以下是学生勾选的资料（{', '.join(used)}），"
         f"回答务必基于资料、直指考点，使用{lang}，公式用 LaTeX。\n\n{context}"
     )
+    if body.use_web:
+        last_user = next((m.content for m in reversed(body.messages) if m.role == "user"), "")
+        block = await websearch_service.maybe_web_context(last_user.strip()[:100], True)
+        if block:
+            system += block
     history = _msg_list(body.messages)[-12:]
     messages = [{"role": "system", "content": system}] + history
 
@@ -223,9 +256,14 @@ async def tutor_chat(body: TutorChatRequest):
 
 @router.post("/study-guide")
 async def study_guide(body: StudyGuideRequest):
-    from ..services.exam_service import generate_study_guide
+    from ..services.exam_service import _guide_messages
 
-    md = await generate_study_guide(body.paths, body.language, body.provider or "", body.model or "")
+    messages = _guide_messages(body.paths, body.language)
+    if body.use_web:
+        block = await websearch_service.maybe_web_context(_note_topic_query(body.paths), True)
+        if block:
+            messages[-1]["content"] += block
+    md = await complete(body.provider or "", messages, body.model or "")
     result = {"markdown": md}
     if body.save_path:
         fm = {"generated": True, "created": datetime.date.today().isoformat()}
@@ -243,6 +281,10 @@ async def topic_architecture_stream(body: TopicArchitectureRequest):
 
     overview = arch_service.topic_overview(body.topic)
     messages = arch_service.arch_messages(overview, body.goal or "")
+    if body.use_web:
+        block = await websearch_service.maybe_web_context((body.goal or "").strip() or body.topic, True)
+        if block:
+            messages[-1]["content"] += block
     title = f"{body.topic} · 整体架构"
     save_path = body.save_path or f"{body.topic}/_架构/整体架构.md"
 
@@ -324,6 +366,10 @@ async def study_guide_stream(body: StudyGuideRequest):
     from ..services.exam_service import _guide_messages
 
     messages = _guide_messages(body.paths, body.language)
+    if body.use_web:
+        block = await websearch_service.maybe_web_context(_note_topic_query(body.paths), True)
+        if block:
+            messages[-1]["content"] += block
 
     async def gen():
         buf = []
