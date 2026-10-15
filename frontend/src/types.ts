@@ -57,6 +57,14 @@ export interface ConceptRef {
   count: number
 }
 
+/** 笔记参考链接（存在 frontmatter links，阅读器「参考链接」卡管理） */
+export interface NoteLinkItem {
+  title: string
+  url: string
+  added_at?: string
+  source?: string
+}
+
 export interface NoteDetail {
   path: string
   name: string
@@ -84,6 +92,16 @@ export interface Provider {
   has_key?: boolean
 }
 
+/** 外部 MCP 服务器（stdio）：供联网搜索 provider=mcp 与 AI 对话 mcp_tool 工具调用 */
+export interface McpServer {
+  id: string
+  name: string
+  command: string
+  args: string[]
+  env: Record<string, string>
+  enabled: boolean
+}
+
 export interface Settings {
   providers: Provider[]
   active_provider: string
@@ -93,6 +111,20 @@ export interface Settings {
   exam: { default_count: number; types: string[]; difficulty: string }
   /** 侧边对话嵌入本机 Kimi Code Web（kimi web），默认关闭 */
   kimi_web: { enabled: boolean; port: number }
+  /** 外部 MCP 服务器（stdio）；env 里含 KEY/TOKEN 的值经 GET 返回时打码 */
+  mcp_servers: McpServer[]
+  /** 联网搜索：AI 功能可按需检索网络；api_key 经 GET 返回时打码，has_key 表示是否已配置。
+   *  provider=mcp 时用 mcp_server（服务器 id）+ mcp_tool（工具名）调用外部 MCP 搜索工具 */
+  web_search: {
+    enabled: boolean
+    provider: string
+    api_key: string
+    base_url: string
+    max_results: number
+    has_key?: boolean
+    mcp_server?: string
+    mcp_tool?: string
+  }
   language: string
   supported_types?: string[]
 }
@@ -212,6 +244,8 @@ export interface ChatSessionMsg {
   content: string
   created_at?: string
   tool_steps?: ChatToolStep[]
+  /** 后端随回答生成的建议笔记标题（依据提问并行生成），预填「存为笔记」 */
+  note_title?: string
 }
 
 export interface ChatSessionMeta {

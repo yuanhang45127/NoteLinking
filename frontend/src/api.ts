@@ -1,6 +1,6 @@
 // 后端 API 客户端 + SSE 流式工具
 import type {
-  Annotation, ArxivResult, BookMeta, ChatSession, ChatSessionMeta, Checklist, Exam, Goal, GraphData, ImportBookResult, KimiWebStatus, NoteDetail, Paper, PinnedNote, Provider, Settings,
+  Annotation, ArxivResult, BookMeta, ChatSession, ChatSessionMeta, Checklist, Exam, Goal, GraphData, ImportBookResult, KimiWebStatus, McpServer, NoteDetail, NoteLinkItem, Paper, PinnedNote, Provider, Settings,
   Topic, TreeNode, ZoteroCollection, ZoteroConfig, ZoteroSyncResult,
 } from './types'
 
@@ -98,6 +98,19 @@ export const api = {
   resolveLink: (target: string, topic?: string) =>
     http<NoteDetail>(`/api/notes/resolve-link?${qs({ target, topic })}`),
 
+  // 参考链接（frontmatter links）
+  noteLinks: (path: string) => http<{ links: NoteLinkItem[] }>(`/api/notes/links?${qs({ path })}`),
+  addNoteLink: (path: string, url: string, title = '', source = 'manual') =>
+    post<{ links: NoteLinkItem[] }>('/api/notes/links', { path, url, title, source }),
+  removeNoteLink: (path: string, url: string) =>
+    post<{ links: NoteLinkItem[] }>('/api/notes/links/remove', { path, url }),
+
+  // 联网搜索（服务商配置见 设置 → 联网搜索）
+  webSearch: (q: string, maxResults?: number) =>
+    http<{ provider: string; results: { title: string; url: string; snippet: string }[] }>(
+      `/api/web/search?${qs({ q, max_results: maxResults })}`),
+  webFetch: (url: string) => post<{ title: string; url: string; text: string }>('/api/web/fetch', { url }),
+
   // 高亮
   annotations: (path: string) =>
     http<{ annotations: Annotation[] }>(`/api/annotations?${qs({ path })}`),
@@ -128,6 +141,12 @@ export const api = {
   // 笔记追加（对话存入 / AI 工具共用）
   appendToNote: (path: string, text: string, heading = '') =>
     post<NoteDetail>('/api/notes/append', { path, text, heading }),
+
+  // 阅读进度（服务端记忆，打开笔记时定位到上次位置）
+  getReadProgress: (path: string) =>
+    http<{ ratio: number; heading: string; updated_at: string }>(`/api/notes/read-progress?${qs({ path })}`),
+  saveReadProgress: (path: string, ratio: number, heading = '') =>
+    put<{ ratio: number; heading: string; updated_at: string }>('/api/notes/read-progress', { path, ratio, heading }),
 
   // 考试
   generateExam: (body: { paths: string[]; types: string[]; count: number; difficulty: string; title?: string }) =>
@@ -203,18 +222,29 @@ export const api = {
   saveReader: (reader: Settings['reader']) => put<Settings>('/api/settings/reader', reader),
   saveGraph: (graph: Settings['graph']) => put<Settings>('/api/settings/graph', graph),
   saveKimiWeb: (kimi_web: Partial<Settings['kimi_web']>) => put<Settings>('/api/settings/kimi-web', kimi_web),
+  saveWebSearch: (cfg: Partial<Settings['web_search']>) => put<Settings>('/api/settings/web-search', cfg),
 
   // 外部工具集成（本机 Kimi Code Web 探测）
   kimiWebStatus: () => http<KimiWebStatus>('/api/integrations/kimi-web'),
+
+  // 外部 MCP 服务器（stdio）：列表含各 server 的工具与连接错误
+  mcpServers: () =>
+    http<{ servers: (McpServer & { tools: { name: string; description: string }[]; error: string })[] }>(
+      '/api/mcp/servers'),
+  mcpCall: (server: string, tool: string, args: Record<string, unknown> = {}) =>
+    post<{ result: { content: { type: string; text: string }[]; isError: boolean } }>(
+      '/api/mcp/call', { server, tool, arguments: args }),
+  saveMcpServers: (servers: McpServer[]) =>
+    put<Settings>('/api/settings/mcp-servers', { mcp_servers: servers }),
 
   // 账号（会话走 HttpOnly Cookie，无需手动携带）
   authStatus: () =>
     http<{ mode: 'open' | 'multi'; user: string | null; users: number; email_verify?: boolean }>('/api/auth/status'),
   login: (username: string, password: string) =>
     post<{ username: string }>('/api/auth/login', { username, password }),
-  register: (username: string, password: string, claimExisting: boolean, email = '', code = '') =>
-    post<{ username: string; claimed_existing?: boolean }>('/api/auth/register', {
-      username, password, claim_existing: claimExisting, email, code,
+  register: (username: string, password: string, email = '', code = '') =>
+    post<{ username: string }>('/api/auth/register', {
+      username, password, email, code,
     }),
   sendEmailCode: (email: string) =>
     post<{ sent: boolean; cooldown: number }>('/api/auth/email-code', { email }),

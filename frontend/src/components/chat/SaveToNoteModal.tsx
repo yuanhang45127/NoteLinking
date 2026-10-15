@@ -5,8 +5,10 @@ import { api } from '../../api'
 import { useApp } from '../../store'
 import Modal from '../Modal'
 
-export default function SaveToNoteModal({ content, onClose, toast }: {
+export default function SaveToNoteModal({ content, suggestedTitle, onClose, toast }: {
   content: string
+  /** AI 随回答生成的建议标题（整条「存为笔记」时带上），预填新建标题框 */
+  suggestedTitle?: string
   onClose: () => void
   toast: (t: string, k?: 'ok' | 'err') => void
 }) {
@@ -21,7 +23,7 @@ export default function SaveToNoteModal({ content, onClose, toast }: {
   const [heading, setHeading] = useState('')
 
   // 新建模式
-  const [title, setTitle] = useState('')
+  const [title, setTitle] = useState(suggestedTitle || '')
   const [topic, setTopic] = useState(topics[0]?.name || '')
 
   const searchRef = useRef<number>()

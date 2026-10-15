@@ -4,14 +4,16 @@
 发起调用，本层解析、执行（白名单，无删除类工具），把结果以 [TOOL_RESULT] 回灌，
 直到模型给出最终回答或达到轮次上限。
 """
+import asyncio
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
-from . import chat_store, vault
-from .llm_service import stream_llm
+from . import chat_store, mcp_client, vault, websearch_service
+from .llm_service import complete, stream_llm
 
 MAX_TOOL_ROUNDS = 6
 HISTORY_WINDOW = 20          # 送入模型的历史消息条数
@@ -21,6 +23,8 @@ MAX_CONTEXT_NOTES = 4        # 单轮最多引用笔记篇数
 TEXT_REF_PREFIX = "text:"    # 行内文字引用前缀（阅读器划选「加入对话」），后缀为 JSON
 MAX_CONTEXT_SNIPPETS = 4     # 单轮最多行内文字引用条数
 CONTEXT_TEXT_CHARS = 4000    # 单条行内文字注入上限
+TITLE_MAX_CHARS = 24         # 建议笔记标题长度上限（对齐文件名习惯）
+NOTE_TITLE_TIMEOUT = 12      # 标题生成兜底超时（秒），超时/失败静默降级
 
 TOOL_DOCS = """\
 - list_topics(): 列出笔记库全部主题（名称、笔记数）。
@@ -29,7 +33,11 @@ TOOL_DOCS = """\
 - read_note(path, section?): 读取笔记全文；给 section（章节标题）时只返回该章节内容，省 token。
 - create_note(path, content, overwrite=false): 新建笔记，path 形如「主题/标题.md」。
 - append_to_note(path, text, heading?): 把一段 Markdown 追加到笔记末尾，heading 为可选小节标题。
-- move_note(src, dst): 移动或重命名笔记。"""
+- move_note(src, dst): 移动或重命名笔记。
+- web_search(q): 联网搜索最新资料（需在「设置 → 联网搜索」启用并配置服务商），返回标题、链接与摘要。
+- mcp_tool(server, tool, args?): 调用「设置 → MCP 服务器」里已配置且启用的外部 MCP 工具（典型：web search MCP）；server 为服务器 id，args 为可选的 JSON 对象参数。
+- fetch_webpage(url): 抓取一个网页的正文文本，用于展开搜索结果里的链接。
+- add_note_link(path, url, title?, source?): 把参考链接存入一篇笔记的 frontmatter（写操作，执行前先告知用户）。"""
 
 SYSTEM_PROMPT = f"""你是 NoteLink 笔记库中的 AI 助手。回答使用 GitHub 风格 Markdown，数学公式用 LaTeX（$...$ / $$...$$）。你可以使用以下工具读写笔记库：
 
@@ -154,6 +162,65 @@ def _t_move_note(args: Dict) -> Tuple[str, str]:
     return f"已移动到 {note['path']}", f"{src} → {note['path']}"
 
 
+def _run_async(coro) -> dict:
+    """在同步工具里跑异步协程：工具执行发生在事件循环线程内，不能直接
+    run_until_complete，放到工作线程用 asyncio.run 执行。"""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+def _t_web_search(args: Dict) -> Tuple[str, str]:
+    q = str(args.get("q") or "").strip()
+    if not q:
+        raise ValueError("缺少参数 q")
+    if not websearch_service.is_enabled():
+        return "联网搜索未启用：请先在「设置 → 联网搜索」中启用并配置搜索服务商。", "web_search 未启用"
+    data = _run_async(websearch_service.search(q))
+    results = data.get("results") or []
+    if not results:
+        return f"（「{q}」没有搜索结果）", f"「{q}」无结果"
+    lines = [
+        f"- {r.get('title') or r.get('url')}\n  {r.get('url')}\n  {(r.get('snippet') or '').strip()}"
+        for r in results
+    ]
+    return "\n".join(lines)[:TOOL_RESULT_CHARS], f"命中 {len(results)} 条"
+
+
+def _t_fetch_webpage(args: Dict) -> Tuple[str, str]:
+    url = str(args.get("url") or "").strip()
+    if not url:
+        raise ValueError("缺少参数 url")
+    page = _run_async(websearch_service.fetch_webpage(url))
+    text = f"标题：{page.get('title')}\n\n正文：\n{page.get('text')}"
+    return text[:TOOL_RESULT_CHARS], f"抓取 {url}"
+
+
+def _t_mcp_tool(args: Dict) -> Tuple[str, str]:
+    server = str(args.get("server") or "").strip()
+    tool = str(args.get("tool") or "").strip()
+    extra = args.get("args") if isinstance(args.get("args"), dict) else {}
+    if not server or not tool:
+        raise ValueError("缺少参数 server / tool")
+    try:
+        result = mcp_client.call_tool(server, tool, extra)
+    except mcp_client.MCPError as e:
+        return (f"调用失败：{e}。请检查「设置 → MCP 服务器」里该服务器已配置、启用且命令可启动。",
+                f"mcp_tool 失败：{tool}")
+    text = "\n".join(c.get("text", "") for c in result.get("content") or [] if isinstance(c, dict))
+    if result.get("isError"):
+        return text or "（MCP 工具返回错误，但没有给出内容）", f"mcp_tool 错误：{tool}"
+    return text or "（MCP 工具无返回）", f"mcp_tool {tool} 完成"
+
+
+def _t_add_note_link(args: Dict) -> Tuple[str, str]:
+    path = str(args.get("path") or "").strip()
+    url = str(args.get("url") or "").strip()
+    if not path or not url:
+        raise ValueError("缺少参数 path / url")
+    vault.add_note_link(path, str(args.get("title") or ""), url, str(args.get("source") or "manual"))
+    return f"已添加参考链接：{url}（{path}）", f"已添加链接到 {path}"
+
+
 # name → (必填参数, 执行函数)
 TOOLS = {
     "list_topics": ((), _t_list_topics),
@@ -163,6 +230,10 @@ TOOLS = {
     "create_note": (("path",), _t_create_note),
     "append_to_note": (("path", "text"), _t_append_to_note),
     "move_note": (("src", "dst"), _t_move_note),
+    "web_search": (("q",), _t_web_search),
+    "fetch_webpage": (("url",), _t_fetch_webpage),
+    "mcp_tool": (("server", "tool"), _t_mcp_tool),
+    "add_note_link": (("path", "url"), _t_add_note_link),
 }
 
 
@@ -256,6 +327,31 @@ def execute_tool(call: Dict) -> Tuple[bool, str, str]:
 
 
 # ---------------------------------------------------------------- 轮次循环
+async def generate_note_title(question: str, provider_id: str = "", model: str = "",
+                              temperature: Optional[float] = None) -> str:
+    """把用户提问浓缩成一句笔记标题，用于预填「存为笔记」的标题框。
+
+    只依据提问（与回答流并行生成，不增加回答等待）；超时或失败返回空串。
+    """
+    prompt = (
+        "请根据下面的提问为对应回答起一个笔记标题：16 字以内、名词式的词条名"
+        "（像百科词条，不要照抄提问的问句），适合直接当文件名——"
+        "不要书名号、引号、句末标点和斜杠，只输出标题本身，不要任何解释或前缀。"
+        "例：提问「用一句话说明什么是极限」→ 标题「极限的定义」。\n\n提问：" + question[:500]
+    )
+    try:
+        text = await asyncio.wait_for(
+            complete(provider_id, [{"role": "user", "content": prompt}], model, temperature),
+            timeout=NOTE_TITLE_TIMEOUT,
+        )
+    except Exception:  # noqa: BLE001 — 标题只是建议，失败静默
+        return ""
+    line = text.strip().splitlines()[0].strip() if text.strip() else ""
+    line = re.sub(r"^(?:标题|题目|建议标题)\s*[:：]\s*", "", line)
+    line = line.strip(" \t# 《》「」『』“”\"'。．.！!？?…、，,/\\")
+    return line[:TITLE_MAX_CHARS]
+
+
 def parse_text_ref(ref: str) -> Optional[Dict]:
     """解析行内文字引用：text:{"t": 选中文字, "s": 来源笔记}。坏 JSON / 空文本返回 None。"""
     if not ref.startswith(TEXT_REF_PREFIX):
@@ -321,9 +417,15 @@ async def run_turn(session_id: str, context_paths: List[str],
     """执行一轮对话：流式输出 → 检出工具调用则执行回灌 → 循环 → 落库 → done。
 
     事件：delta（增量文本）/ tool（status=start|done）/ done（带会话元信息与新消息）/ error。
+    done 的 message 带 note_title（依据提问并行生成的建议笔记标题，可为空）。
     """
     session = chat_store.get_session(session_id)
     messages = _build_messages(session, context_paths)
+
+    # 提问一落地就并行发起建议标题生成（与回答流同跑），done 事件带回给前端预填「存为笔记」
+    question = session["messages"][-1]["content"]
+    title_task = (asyncio.create_task(generate_note_title(question, provider_id, model, temperature))
+                  if question.strip() else None)
 
     full_text = ""
     tool_steps: List[Dict] = []
@@ -345,7 +447,14 @@ async def run_turn(session_id: str, context_paths: List[str],
         messages.append({"role": "user", "content": f"[TOOL_RESULT] {call['tool']} →\n{result}\n\n请继续。"})
 
     display = strip_tool_calls(full_text).strip()
-    session = chat_store.append_message(session_id, "assistant", display, tool_steps=tool_steps or None)
+    note_title = ""
+    if title_task is not None:
+        try:
+            note_title = await title_task
+        except Exception:  # noqa: BLE001 — 标题失败不影响回答落库
+            note_title = ""
+    session = chat_store.append_message(session_id, "assistant", display,
+                                        tool_steps=tool_steps or None, note_title=note_title)
     yield {
         "type": "done",
         "session": chat_store._meta(session),

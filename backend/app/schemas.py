@@ -44,6 +44,12 @@ class NoteAppend(BaseModel):
     heading: str = Field("", description="可选的小节标题，如「AI 补充」")
 
 
+class ReadProgressIn(BaseModel):
+    path: str
+    ratio: float = Field(0, description="滚动位置占可滚动高度的比例 0~1")
+    heading: str = Field("", description="当时可见的最近小节标题 id（可选）")
+
+
 # ---- 高亮标注 ----
 class AnnotationCreate(BaseModel):
     path: str
@@ -86,6 +92,7 @@ class GenerateNoteRequest(BaseModel):
     save_path: Optional[str] = Field(None, description="生成后保存到的库内路径（如 主题/笔记.md）")
     provider: Optional[str] = None
     model: Optional[str] = None
+    use_web: bool = Field(False, description="是否联网搜索补充最新资料")
 
 
 class AskRequest(BaseModel):
@@ -109,6 +116,7 @@ class TutorChatRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     temperature: Optional[float] = None
+    use_web: bool = Field(False, description="是否联网搜索补充最新资料")
 
 
 class TermRequest(BaseModel):
@@ -146,6 +154,7 @@ class TopicArchitectureRequest(BaseModel):
     save_path: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    use_web: bool = Field(False, description="是否联网搜索补充最新资料")
 
 
 class TopicScaffoldRequest(BaseModel):
@@ -161,6 +170,7 @@ class StudyGuideRequest(BaseModel):
     save_path: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    use_web: bool = Field(False, description="是否联网搜索补充最新资料")
 
 
 # ---- 读书笔记 ----
@@ -207,6 +217,12 @@ class ProvidersIn(BaseModel):
 
 class ActiveProviderIn(BaseModel):
     provider_id: str = ""
+
+
+class McpCallIn(BaseModel):
+    server: str
+    tool: str
+    arguments: dict = Field(default_factory=dict)
 
 
 class HighlightIn(BaseModel):

@@ -96,12 +96,18 @@ def delete_session(session_id: str) -> None:
 
 
 def append_message(session_id: str, role: str, content: str,
-                   tool_steps: Optional[List[Dict]] = None) -> Dict:
-    """追加一条消息并触碰 updated_at；首条用户消息自动生成会话标题。"""
+                   tool_steps: Optional[List[Dict]] = None,
+                   note_title: str = "") -> Dict:
+    """追加一条消息并触碰 updated_at；首条用户消息自动生成会话标题。
+
+    note_title：assistant 回答随附的建议笔记标题（前端预填「存为笔记」），空则不落字段。
+    """
     s = get_session(session_id)
     msg: Dict = {"role": role, "content": content, "created_at": _now()}
     if tool_steps:
         msg["tool_steps"] = tool_steps
+    if note_title:
+        msg["note_title"] = note_title
     s["messages"].append(msg)
     s["updated_at"] = _now()
     if role == "user" and s.get("title", DEFAULT_TITLE) == DEFAULT_TITLE:

@@ -4,8 +4,8 @@ from typing import List
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from ..schemas import NoteAppend, NoteCreate, NoteMove, NoteSave
-from ..services import annotations_store, vault
+from ..schemas import NoteAppend, NoteCreate, NoteMove, NoteSave, ReadProgressIn
+from ..services import annotations_store, read_positions_store, vault
 from ..utils import sanitize_filename
 
 router = APIRouter(prefix="/api", tags=["notes"])
@@ -25,6 +25,48 @@ class NotePin(BaseModel):
 class NoteFinish(BaseModel):
     path: str
     finished: bool
+
+
+class NoteLinkAdd(BaseModel):
+    path: str
+    title: str = ""
+    url: str
+    source: str = "manual"  # manual | web_search
+
+
+class NoteLinkRemove(BaseModel):
+    path: str
+    url: str
+
+
+@router.get("/notes/links")
+def note_links(path: str = Query(...)):
+    """笔记的参考链接列表（frontmatter links）。"""
+    return {"links": vault.list_note_links(path)}
+
+
+@router.post("/notes/links")
+def add_note_link(body: NoteLinkAdd):
+    """添加参考链接（写 frontmatter links；url 已存在则去重）。"""
+    return vault.add_note_link(body.path, body.title, body.url, body.source)
+
+
+@router.post("/notes/links/remove")
+def remove_note_link(body: NoteLinkRemove):
+    """按 url 删除参考链接。"""
+    return vault.remove_note_link(body.path, body.url)
+
+
+@router.get("/notes/read-progress")
+def get_read_progress(path: str = Query(...)):
+    """笔记上次阅读位置（服务端记忆，跨设备生效）。"""
+    return read_positions_store.get_position(path)
+
+
+@router.put("/notes/read-progress")
+def put_read_progress(body: ReadProgressIn):
+    """回写阅读位置（前端滚动时节流调用）。"""
+    return read_positions_store.save_position(body.path, body.ratio, body.heading)
 
 
 @router.get("/pinned")
@@ -96,12 +138,19 @@ def append_note(body: NoteAppend):
 
 @router.post("/notes/move")
 def move_note(body: NoteMove):
-    return vault.move_note(body.src, body.dst)
+    note = vault.move_note(body.src, body.dst)
+    # 阅读进度跟着搬：旧路径清掉、新路径继承原位置
+    old = read_positions_store.get_position(body.src)
+    if old.get("updated_at"):
+        read_positions_store.save_position(body.dst, old["ratio"], old["heading"])
+        read_positions_store.clear_position(body.src)
+    return note
 
 
 @router.delete("/notes")
 def delete_note(path: str = Query(...)):
     vault.delete_note(path)
+    read_positions_store.clear_position(path)
     return {"ok": True}
 
 

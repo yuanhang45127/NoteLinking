@@ -59,7 +59,7 @@ export default function ChatConversation({ sessionId, compact, onSessionUpdated 
   // @ 二级选择：先选笔记，再选「整篇」或某个章节（chunk）
   const [mentionNote, setMentionNote] = useState<MentionNote | null>(null)
   const [selPop, setSelPop] = useState<{ x: number; y: number; text: string } | null>(null)
-  const [saveTarget, setSaveTarget] = useState<string | null>(null)
+  const [saveTarget, setSaveTarget] = useState<{ content: string; title?: string } | null>(null)
 
   const taRef = useRef<HTMLTextAreaElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -208,7 +208,7 @@ export default function ChatConversation({ sessionId, compact, onSessionUpdated 
                 {!streaming && m.content && (
                   <div className="chat-msg-ops">
                     <button className="btn text" onClick={() => copyText(m.content)}>复制</button>
-                    <button className="btn text" onClick={() => setSaveTarget(m.content)}>存为笔记</button>
+                    <button className="btn text" onClick={() => setSaveTarget({ content: m.content, title: m.note_title })}>存为笔记</button>
                     {i === lastAssistantIdx && (
                       <button className="btn text" onClick={() => send('', [], true)} disabled={streaming}>重新生成</button>
                     )}
@@ -225,7 +225,7 @@ export default function ChatConversation({ sessionId, compact, onSessionUpdated 
         <div className="sel-popover" style={{ left: selPop.x, top: selPop.y, transform: 'translateX(-50%)' }}>
           <div className="hint">已选中 {selPop.text.length} 个字</div>
           <div className="btns">
-            <button className="btn primary small" onClick={() => { setSaveTarget(selPop.text); setSelPop(null) }}>存入笔记</button>
+            <button className="btn primary small" onClick={() => { setSaveTarget({ content: selPop.text }); setSelPop(null) }}>存入笔记</button>
             <button className="btn small" onClick={() => { copyText(selPop.text); setSelPop(null) }}>复制</button>
           </div>
         </div>
@@ -299,7 +299,8 @@ export default function ChatConversation({ sessionId, compact, onSessionUpdated 
       </div>
 
       {saveTarget !== null && (
-        <SaveToNoteModal content={saveTarget} onClose={() => setSaveTarget(null)} toast={toast} />
+        <SaveToNoteModal content={saveTarget.content} suggestedTitle={saveTarget.title}
+          onClose={() => setSaveTarget(null)} toast={toast} />
       )}
     </div>
   )

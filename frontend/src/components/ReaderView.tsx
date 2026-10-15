@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, getModelOverride, llmUrls } from '../api'
 import { useApp } from '../store'
-import type { Annotation, NoteDetail } from '../types'
+import type { Annotation, NoteDetail, NoteLinkItem } from '../types'
 import { applyHighlights, applyInlineComments, selectionInfo } from '../lib/highlight'
 import { applySelectionEdit, deleteSectionAt } from '../lib/contentEdit'
 import { sendChatReference, sendChatTextRef } from './chat/chatDockSignal'
@@ -118,6 +118,60 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     scroller?.addEventListener('scroll', onScroll)
     return () => scroller?.removeEventListener('scroll', onScroll)
   }, [note, conceptNames])
+
+  /* ---------- 阅读进度：服务端记忆，打开时定位到上次位置，滚动时节流回写 ---------- */
+  const restoredPathRef = useRef('')
+  const lastSavedRef = useRef(NaN)
+  useEffect(() => {
+    const path = note.path
+    const scrollerEl = () => wrapRef.current?.closest('.page-scroll') as HTMLElement | null
+    const curHeadingId = () => {
+      let cur = ''
+      bodyRef.current?.querySelectorAll('h2[id], h3[id]').forEach((h) => {
+        if ((h as HTMLElement).getBoundingClientRect().top < 140) cur = h.id
+      })
+      return cur
+    }
+    const save = (el: HTMLElement | null) => {
+      if (!el) return
+      const max = el.scrollHeight - el.clientHeight
+      if (max <= 0) return
+      const ratio = Math.min(1, Math.max(0, el.scrollTop / max))
+      if (Math.abs(ratio - lastSavedRef.current) < 0.005) return
+      lastSavedRef.current = ratio
+      api.saveReadProgress(path, ratio, curHeadingId()).catch(() => { /* 进度保存失败不打扰阅读 */ })
+    }
+
+    // 恢复：每篇笔记打开时拉一次（切换/重开都生效，不用本地缓存）
+    if (restoredPathRef.current !== path) {
+      restoredPathRef.current = path
+      lastSavedRef.current = NaN
+      let cancelled = false
+      ;(async () => {
+        try {
+          const pos = await api.getReadProgress(path)
+          const el = scrollerEl()
+          if (cancelled || !el || !(pos.ratio > 0.02)) return
+          const apply = () => { el.scrollTop = pos.ratio * (el.scrollHeight - el.clientHeight) }
+          apply()
+          // 图片/KaTeX 异步撑开页面后各校准一次
+          window.setTimeout(() => { if (!cancelled) apply() }, 400)
+          window.setTimeout(() => { if (!cancelled) apply() }, 1000)
+        } catch { /* 拉不到就不定位 */ }
+      })()
+    }
+
+    // 回写：滚动停止 800ms 后保存；切换笔记/卸载时最后落一次
+    let timer = 0
+    const onScroll = () => { window.clearTimeout(timer); timer = window.setTimeout(() => save(scrollerEl()), 800) }
+    const el = scrollerEl()
+    el?.addEventListener('scroll', onScroll)
+    return () => {
+      window.clearTimeout(timer)
+      el?.removeEventListener('scroll', onScroll)
+      save(el)
+    }
+  }, [note.path])
 
   /* ---------- 划选 → 弹窗 ---------- */
   const onMouseUp = (e: React.MouseEvent) => {
@@ -383,6 +437,9 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
           </div>
         </div>
 
+        {/* 参考链接（frontmatter links，可折叠） */}
+        <NoteLinks note={note} reload={reload} toast={toast} />
+
         {/* 正文 */}
         <div
           ref={bodyRef}
@@ -517,7 +574,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
 
         {/* 重新生成 */}
         {regenOpen && (
-          <RegenModal note={note} onClose={() => setRegenOpen(false)} onDone={async () => { setRegenOpen(false); await reload() }} toast={toast} />
+          <RegenModal note={note} settings={settings} onClose={() => setRegenOpen(false)} onDone={async () => { setRegenOpen(false); await reload() }} toast={toast} />
         )}
 
         {/* 编辑 Markdown 源码（仅未锁定笔记） */}
@@ -634,6 +691,79 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
   )
 }
 
+/* ---------- 参考链接卡（frontmatter links） ---------- */
+function NoteLinks({ note, reload, toast }: { note: NoteDetail; reload: () => Promise<void>; toast: (t: string, k?: 'ok' | 'err') => void }) {
+  const links: NoteLinkItem[] = (note.frontmatter?.links as NoteLinkItem[] | undefined) || []
+  const [open, setOpen] = useState(false)
+  const [url, setUrl] = useState('')
+  const [title, setTitle] = useState('')
+  const [adding, setAdding] = useState(false)
+
+  const sourceLabel = (s?: string) => (s === 'web_search' ? '联网' : s === 'ai' ? 'AI' : '手动')
+
+  const add = async () => {
+    const u = url.trim()
+    if (!u) return
+    setAdding(true)
+    try {
+      let t = title.trim()
+      if (!t) {
+        // 标题留空：先抓取网页标题，失败回退为域名
+        try { t = (await api.webFetch(u)).title || '' } catch { /* 回退 host */ }
+        if (!t) { try { t = new URL(u).host } catch { t = u } }
+      }
+      await api.addNoteLink(note.path, u, t)
+      setUrl(''); setTitle('')
+      toast('已添加参考链接')
+      await reload()
+    } catch (e: any) { toast(e.message, 'err') }
+    setAdding(false)
+  }
+
+  const remove = async (u: string) => {
+    try { await api.removeNoteLink(note.path, u); await reload() }
+    catch (e: any) { toast(e.message, 'err') }
+  }
+
+  if (!links.length && !open) return null
+
+  return (
+    <div className="note-links">
+      <button className="nl-head" onClick={() => setOpen((v) => !v)}
+        title={open ? '收起参考链接' : '展开参考链接'}>
+        <IconLink size={14} /> 参考链接{links.length ? ` (${links.length})` : ''}
+        <span className="nl-caret">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="nl-body">
+          {links.map((l) => (
+            <div key={l.url} className="nl-row">
+              <button className="nl-link" title={l.url}
+                onClick={() => window.open(l.url, '_blank', 'noopener')}>
+                🔗 {l.title || l.url}
+              </button>
+              <span className="nl-src">{sourceLabel(l.source)}</span>
+              <button className="nl-del" title="删除该链接" onClick={() => remove(l.url)}>✕</button>
+            </div>
+          ))}
+          {!links.length && <div className="rail-empty">还没有参考链接，在下面添加。</div>}
+          <div className="nl-add">
+            <input className="text-input" placeholder="链接地址 https://..." value={url}
+              disabled={adding} onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && add()} />
+            <input className="text-input" placeholder="标题（留空自动获取）" value={title}
+              disabled={adding} onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && add()} />
+            <button className="btn small primary" disabled={adding || !url.trim()} onClick={add}>
+              {adding ? '获取中...' : '添加'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** 把正文纯文本中出现的概念名包成 wikilink（跳过代码/公式/已有链接） */
 function autoLinkConcepts(el: HTMLElement, names: string[]) {
   if (!names.length) return
@@ -704,18 +834,21 @@ function SourceEditModal({ note, onClose, onDone, toast }: { note: NoteDetail; o
 }
 
 /* ---------- 重新生成弹窗 ---------- */
-function RegenModal({ note, onClose, onDone, toast }: { note: NoteDetail; onClose: () => void; onDone: () => void; toast: any }) {
+function RegenModal({ note, settings, onClose, onDone, toast }: { note: NoteDetail; settings: ReturnType<typeof useApp>['settings']; onClose: () => void; onDone: () => void; toast: any }) {
   const [prompt, setPrompt] = useState(`请围绕「${note.title}」重写本篇笔记：结构更清晰，保留原文的公式与概念链接。`)
   const [text, setText] = useState('')
   const [running, setRunning] = useState(false)
   const [bg, setBg] = useState(false)
+  const [useWeb, setUseWeb] = useState(false)
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
   const start = () => {
     setRunning(true); setText('')
     ctrlRef.current = streamTracked(
       { title: `重写笔记 · ${note.title}`, kind: 'note', foreground: () => setBg(false) },
       llmUrls.generateNote, {
-        topic: note.topic, prompt, title: note.title, stream: true, ...getModelOverride(),
+        topic: note.topic, prompt, title: note.title, stream: true,
+        use_web: useWeb,
+        ...getModelOverride(),
       },
       {
         onDelta: (t) => setText((s) => s + t),
@@ -749,6 +882,14 @@ function RegenModal({ note, onClose, onDone, toast }: { note: NoteDetail; onClos
         <label>生成要求（上下文将一并发送给 AI）</label>
         <textarea className="text-input" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
       </div>
+      {settings?.web_search?.enabled && (
+        <label className="check-row" style={{ cursor: 'pointer', marginBottom: 10 }}>
+          <input type="checkbox" checked={useWeb} disabled={running}
+            onChange={(e) => setUseWeb(e.target.checked)} />
+          联网搜索
+          <span style={{ color: 'var(--muted)', fontSize: 12.5 }}>允许 AI 检索网络获取最新信息</span>
+        </label>
+      )}
       {(text || running) && (
         <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`} style={{ marginTop: 6 }}>
           <StreamMd text={text} streaming={running} />
