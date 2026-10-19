@@ -196,3 +196,49 @@ def test_build_messages_section_context(data_dir):
     assert "模块二的内容" in tail and "AI4EDA/大纲.md · 模块二 进阶" in tail
     assert "模块一的内容" not in tail  # 只注入该章节
 
+
+
+# ---------------------------------------------------------------- run_turn 过程事件
+def test_run_turn_emits_process_events(data_dir, monkeypatch):
+    """一轮对话的事件流：llm_start → delta* → llm_done（→ tool → 继续）→ done，
+    tool done 带 result 预览，tool_steps 落库含 result。"""
+    import asyncio
+
+    async def fake_llm_call(provider_id, messages, model="", temperature=None, purpose="", seq=1):
+        yield {"type": "llm_start", "seq": seq, "purpose": purpose, "provider": "p", "model": "m", "prompt_chars": 10}
+        if seq == 1:
+            yield {"type": "delta", "text": "我先查一下\n```json\n{\"tool\": \"search_notes\", \"args\": {\"q\": \"EDA\"}}\n```"}
+        else:
+            yield {"type": "delta", "text": "查到了：EDA 是电子设计自动化。"}
+        yield {"type": "llm_done", "seq": seq, "chars": 5, "elapsed": 0.1}
+
+    async def fake_title(question, provider_id="", model="", temperature=None):
+        return "EDA 简介"
+
+    monkeypatch.setattr(chat_agent.process, "llm_call", fake_llm_call)
+    monkeypatch.setattr(chat_agent, "generate_note_title", fake_title)
+
+    s = chat_store.create_session()
+    chat_store.append_message(s["id"], "user", "EDA 是什么")
+    events = asyncio.run(_collect(chat_agent.run_turn(s["id"], [])))
+    types = [e["type"] for e in events]
+    assert types.count("llm_start") == 2
+    # 开头是「生成建议标题」的 step（与回答并行发起）
+    assert types[0] == "step"
+    assert types[1] == "llm_start"
+    tool_dones = [e for e in events if e["type"] == "tool" and e.get("status") == "done"]
+    assert len(tool_dones) == 1
+    assert "搜索" in tool_dones[0]["summary"] or tool_dones[0]["summary"]
+    assert isinstance(tool_dones[0].get("result"), str)
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["message"]["note_title"] == "EDA 简介"
+    assert done["message"]["tool_steps"][0]["name"] == "search_notes"
+    assert "result" in done["message"]["tool_steps"][0]
+
+
+async def _collect(gen):
+    out = []
+    async for ev in gen:
+        out.append(ev)
+    return out

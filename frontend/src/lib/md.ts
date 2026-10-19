@@ -33,8 +33,25 @@ md.inline.ruler.before('link', 'wikilink', (state, silent) => {
   return true
 })
 
-/** 渲染 markdown → HTML（heading 加 id 供目录定位） */
-export function renderMarkdown(content: string): string {
+// 笔记内相对路径图片 → 库内资产接口（远程/绝对/data URI 不动）；env.noteDir 为笔记所在目录。
+// <img> 请求带不了 X-Notebook-Token 头，站点令牌走 ?token= 查询参数（token_guard 支持）
+md.renderer.rules.image = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]
+  const src = token.attrGet('src') || ''
+  const dir = (env as any)?.noteDir
+  if (typeof dir === 'string' && src && !/^(https?:|data:|\/)/i.test(src)) {
+    let rel = src.replace(/^\.\//, '')
+    try { rel = decodeURIComponent(rel) } catch { /* markdown-it 编码前的原文，保持原样 */ }
+    const full = dir ? `${dir}/${rel}` : rel
+    const site = localStorage.getItem('nl-token') || ''
+    token.attrSet('src', `/api/notes/asset?path=${encodeURIComponent(full)}&token=${encodeURIComponent(site)}`)
+  }
+  token.attrSet('alt', self.renderInlineAsText(token.children || [], options, env))
+  return self.renderToken(tokens, idx, options)
+}
+
+/** 渲染 markdown → HTML（heading 加 id 供目录定位）；noteDir 传笔记所在目录以解析相对路径图片 */
+export function renderMarkdown(content: string, noteDir?: string): string {
   let hIndex = 0
   const prevHeading = md.renderer.rules.heading_open
   md.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
@@ -45,7 +62,7 @@ export function renderMarkdown(content: string): string {
     ;((env as any).toc as TocItem[]).push({ id, text, level: Number(level[1]) })
     return `<${level} id="${id}">`
   }
-  const env: any = {}
+  const env: any = { noteDir }
   const html = md.render(content, env)
   md.renderer.rules.heading_open = prevHeading || ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
   lastToc = (env.toc || []).filter((t: TocItem) => t.level >= 2 && t.level <= 3)

@@ -9,13 +9,14 @@ import GuideWelcome from './components/GuideWelcome'
 import { useApp } from './store'
 import { api } from './api'
 import { chatDock } from './components/chat/chatDockSignal'
+import { restoreAiTasks } from './lib/aiTasks'
 import { AUTH_GATE_EVENT } from './components/authGateSignal'
 import { LogoMark } from './components/Icons'
 
 type Gate = 'checking' | 'login' | 'token' | 'ok'
 
 export default function App() {
-  const { toasts, setUser, setAuthReady } = useApp()
+  const { toasts, setUser, setAuthReady, refreshTree, toast } = useApp()
   const [gate, setGate] = useState<Gate>('checking')
   const location = useLocation()
   const navigate = useNavigate()
@@ -31,6 +32,13 @@ export default function App() {
   const proceed = useCallback(() => {
     setAuthReady(true)
     setGate('ok')
+    // 恢复刷新前遗留的服务端后台 AI 任务（悬浮窗重挂 + 事件流重连）
+    restoreAiTasks({
+      onDone: (evt: any) => {
+        toast(`后台任务已完成${evt?.saved_path ? `：${evt.saved_path}` : ''}`)
+        refreshTree()
+      },
+    }).catch(() => {})
   }, [setAuthReady])
 
   // 鉴权检查（两道门，按顺序）：

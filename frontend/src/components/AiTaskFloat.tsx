@@ -1,8 +1,10 @@
 // 右下角 AI 任务悬浮窗：FAB + 可展开面板，统一查看正在运行的流式生成。
 // 任务由各流式界面经 streamTracked 登记（aiTasks.ts）；「前台」调任务自带的 foreground。
+// 每行可展开「调用过程」时间线（模型调用 / 工具调用，事件由 aiTasks 收集）。
 import { useEffect, useReducer, useState } from 'react'
 import { clearFinished, removeTask, useAiTasks } from '../lib/aiTasks'
 import type { AiTask } from '../lib/aiTasks'
+import ProcessTimeline from './ProcessTimeline'
 
 const STATUS_ICON: Record<AiTask['status'], string> = {
   running: '⏳', done: '✓', error: '✗', stopped: '⏹',
@@ -17,6 +19,8 @@ function fmtDur(ms: number): string {
 export default function AiTaskFloat() {
   const tasks = useAiTasks()
   const [open, setOpen] = useState(false)
+  // 展开了「调用过程」的任务 id
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   // 运行中每秒刷新一次计时；面板打开时即使有已结束任务也保持计时可见
   const [, tick] = useReducer((x: number) => x + 1, 0)
   const running = tasks.filter((t) => t.status === 'running').length
@@ -28,6 +32,12 @@ export default function AiTaskFloat() {
 
   if (!tasks.length) return null
   const now = Date.now()
+  const toggle = (id: string) => setExpanded((s) => {
+    const next = new Set(s)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
 
   return (
     <>
@@ -46,29 +56,42 @@ export default function AiTaskFloat() {
           <div className="ai-task-list">
             {tasks.map((t) => (
               <div key={t.id} className={`ai-task-row st-${t.status}`}>
-                <span className="at-icon">{STATUS_ICON[t.status]}</span>
-                <span className="at-main">
-                  <span className="at-title" title={t.title}>{t.title}</span>
-                  <span className="at-meta">
-                    {fmtDur((t.status === 'running' ? now : t.updatedAt) - t.startedAt)} · {t.chars} 字
-                    {t.note && <em className="at-note" title={t.note}> · {t.note}</em>}
+                <div className="ai-task-line" onClick={() => t.events.length && toggle(t.id)}
+                  style={t.events.length ? { cursor: 'pointer' } : undefined}>
+                  <span className="at-icon">{STATUS_ICON[t.status]}</span>
+                  <span className="at-main">
+                    <span className="at-title" title={t.title}>{t.title}</span>
+                    <span className="at-meta">
+                      {fmtDur((t.status === 'running' ? now : t.updatedAt) - t.startedAt)} · {t.chars} 字
+                      {t.note && <em className="at-note" title={t.note}> · {t.note}</em>}
+                    </span>
                   </span>
-                </span>
-                <span className="at-ops">
-                  {t.status === 'running' && (
-                    <button className="btn text" title="停止生成" onClick={t.stop}>停止</button>
-                  )}
-                  {t.foreground && (
-                    <button className="btn text" title="回到发起界面" onClick={t.foreground}>前台</button>
-                  )}
-                  {t.status !== 'running' && (
-                    <button className="at-x" title="移除" onClick={() => removeTask(t.id)}>×</button>
-                  )}
-                </span>
+                  <span className="at-ops">
+                    {t.events.length > 0 && (
+                      <button className="btn text" title="查看调用过程" onClick={(e) => { e.stopPropagation(); toggle(t.id) }}>
+                        {expanded.has(t.id) ? '收起过程' : '过程'}
+                      </button>
+                    )}
+                    {t.status === 'running' && (
+                      <button className="btn text" title="停止生成" onClick={(e) => { e.stopPropagation(); t.stop() }}>停止</button>
+                    )}
+                    {t.foreground && (
+                      <button className="btn text" title="回到发起界面" onClick={(e) => { e.stopPropagation(); t.foreground!() }}>前台</button>
+                    )}
+                    {t.status !== 'running' && (
+                      <button className="at-x" title="移除" onClick={(e) => { e.stopPropagation(); removeTask(t.id) }}>×</button>
+                    )}
+                  </span>
+                </div>
+                {expanded.has(t.id) && t.events.length > 0 && (
+                  <div className="ai-task-proc">
+                    <ProcessTimeline events={t.events} running={t.status === 'running'} />
+                  </div>
+                )}
               </div>
             ))}
           </div>
-          <div className="ai-task-foot">生成中切走页面会停止该页面的任务；对话与侧边栏任务不受影响。</div>
+          <div className="ai-task-foot">生成中切走页面会停止该页面的任务；对话与侧边栏任务不受影响。点任务行可看调用过程。</div>
         </div>
       )}
     </>

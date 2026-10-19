@@ -1,14 +1,12 @@
 // 把对话内容存入笔记：追加到已有笔记（可搜索）或新建一篇。
 // 「存为笔记」（整条回答）与「存入笔记」（圈选片段）共用。
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../../api'
+import { aiNoteTitle, api } from '../../api'
 import { useApp } from '../../store'
 import Modal from '../Modal'
 
-export default function SaveToNoteModal({ content, suggestedTitle, onClose, toast }: {
+export default function SaveToNoteModal({ content, onClose, toast }: {
   content: string
-  /** AI 随回答生成的建议标题（整条「存为笔记」时带上），预填新建标题框 */
-  suggestedTitle?: string
   onClose: () => void
   toast: (t: string, k?: 'ok' | 'err') => void
 }) {
@@ -23,8 +21,22 @@ export default function SaveToNoteModal({ content, suggestedTitle, onClose, toas
   const [heading, setHeading] = useState('')
 
   // 新建模式
-  const [title, setTitle] = useState(suggestedTitle || '')
+  const [title, setTitle] = useState('')
   const [topic, setTopic] = useState(topics[0]?.name || '')
+  const [naming, setNaming] = useState(false)
+
+  // AI 起标题：切入「新建笔记」时若标题为空则自动命名；输入框旁可强制重新生成
+  const autoTitle = async (force = false) => {
+    if (naming) return
+    if (!force && title.trim()) return
+    setNaming(true)
+    try {
+      const t = await aiNoteTitle(content)
+      if (t) setTitle(t)
+      else toast('AI 没能生成标题，可手动填写')
+    } catch { toast('AI 起标题失败，可手动填写', 'err') }
+    finally { setNaming(false) }
+  }
 
   const searchRef = useRef<number>()
   useEffect(() => {
@@ -66,7 +78,7 @@ export default function SaveToNoteModal({ content, suggestedTitle, onClose, toas
       ops={
         <>
           <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn primary" disabled={busy || (mode === 'append' ? !target : !topic || !title.trim())}
+          <button className="btn primary" disabled={busy || (mode === 'append' ? !target : !topic)}
             onClick={submit}>
             {busy ? '保存中…' : mode === 'append' ? '追加到笔记' : '新建笔记'}
           </button>
@@ -74,7 +86,7 @@ export default function SaveToNoteModal({ content, suggestedTitle, onClose, toas
       }>
       <div className="save-tabs">
         <button className={`save-tab ${mode === 'append' ? 'active' : ''}`} onClick={() => setMode('append')}>追加到已有笔记</button>
-        <button className={`save-tab ${mode === 'create' ? 'active' : ''}`} onClick={() => setMode('create')}>新建笔记</button>
+        <button className={`save-tab ${mode === 'create' ? 'active' : ''}`} onClick={() => { setMode('create'); autoTitle() }}>新建笔记</button>
       </div>
 
       {mode === 'append' ? (
@@ -103,8 +115,10 @@ export default function SaveToNoteModal({ content, suggestedTitle, onClose, toas
             <select className="select-input" value={topic} onChange={(e) => setTopic(e.target.value)}>
               {topics.map((t) => <option key={t.name} value={t.name}>{t.emoji ? `${t.emoji} ` : ''}{t.name}</option>)}
             </select>
-            <input className="text-input" style={{ flex: 1 }} placeholder="笔记标题" value={title} autoFocus
+            <input className="text-input" style={{ flex: 1 }} placeholder={naming ? 'AI 正在起标题…' : '笔记标题（留空则兜底命名）'} value={title}
               onChange={(e) => setTitle(e.target.value)} />
+            <button className="btn small" style={{ whiteSpace: 'nowrap' }} disabled={naming} title="让 AI 根据内容重新起标题"
+              onClick={() => autoTitle(true)}>⟳ AI 起标题</button>
           </div>
           <div className="hint" style={{ marginTop: 8 }}>
             将新建 <b>{topic}/{title.trim() || 'AI 对话笔记'}.md</b>（已存在同名笔记时会提示）

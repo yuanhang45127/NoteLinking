@@ -87,11 +87,13 @@ def test_import_and_notes_stream(client, data_dir, monkeypatch):
     assert book_entry["book_id"] == body["book"]["id"]
     assert book_entry["status"] == "reading"
 
-    # 2) 梗概流：mock complete 返回固定梗概
-    async def fake_complete(provider, messages, model="", temperature=None):
-        return "- 要点一\n- 要点二"
+    # 2) 梗概流：mock llm_call 产出固定梗概（事件协议：llm_start → delta* → llm_done）
+    async def fake_llm_call(provider, messages, model="", temperature=None, purpose="", seq=1):
+        yield {"type": "llm_start", "seq": seq, "purpose": purpose, "provider": "", "model": "", "prompt_chars": 0}
+        yield {"type": "delta", "text": "- 要点一\n- 要点二"}
+        yield {"type": "llm_done", "seq": seq, "chars": 12, "elapsed": 0.0}
 
-    monkeypatch.setattr("app.routers.books.complete", fake_complete)
+    monkeypatch.setattr("app.routers.books.llm_call", fake_llm_call)
 
     with client as c:
         r = c.post(f"/api/books/{body['book']['id']}/notes/stream", json={})

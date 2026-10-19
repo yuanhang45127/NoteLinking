@@ -1,6 +1,6 @@
 // 后端 API 客户端 + SSE 流式工具
 import type {
-  Annotation, ArxivResult, BookMeta, ChatSession, ChatSessionMeta, Checklist, Exam, Goal, GraphData, ImportBookResult, KimiWebStatus, McpServer, NoteDetail, NoteLinkItem, Paper, PinnedNote, Provider, Settings,
+  Annotation, ArxivResult, BookMeta, CallLogEntry, CallLogRecord, ChatSession, ChatSessionMeta, Checklist, Exam, Goal, GraphData, ImportBookResult, KimiWebStatus, McpServer, NoteDetail, NoteLinkItem, Paper, PinnedNote, Provider, Settings,
   Topic, TreeNode, ZoteroCollection, ZoteroConfig, ZoteroSyncResult,
 } from './types'
 
@@ -85,6 +85,8 @@ export const api = {
   saveNote: (path: string, content: string) => put<NoteDetail>('/api/notes', { path, content }),
   pinned: () => http<{ pinned: PinnedNote[] }>('/api/pinned'),
   setNotePin: (path: string, pinned: boolean) => post<NoteDetail>('/api/notes/pin', { path, pinned }),
+  favorites: () => http<{ favorites: PinnedNote[] }>('/api/favorites'),
+  setNoteFav: (path: string, fav: boolean) => post<NoteDetail>('/api/notes/favorite', { path, fav }),
   setNoteFinish: (path: string, finished: boolean) => post<NoteDetail>('/api/notes/finish', { path, finished }),
   deleteNote: (path: string) => del<unknown>(`/api/notes?${qs({ path })}`),
   moveNote: (src: string, dst: string) => post<NoteDetail>('/api/notes/move', { src, dst }),
@@ -142,12 +144,6 @@ export const api = {
   appendToNote: (path: string, text: string, heading = '') =>
     post<NoteDetail>('/api/notes/append', { path, text, heading }),
 
-  // 阅读进度（服务端记忆，打开笔记时定位到上次位置）
-  getReadProgress: (path: string) =>
-    http<{ ratio: number; heading: string; updated_at: string }>(`/api/notes/read-progress?${qs({ path })}`),
-  saveReadProgress: (path: string, ratio: number, heading = '') =>
-    put<{ ratio: number; heading: string; updated_at: string }>('/api/notes/read-progress', { path, ratio, heading }),
-
   // 考试
   generateExam: (body: { paths: string[]; types: string[]; count: number; difficulty: string; title?: string }) =>
     post<Exam>('/api/exams/generate', { ...body, ...getModelOverride() }),
@@ -181,6 +177,22 @@ export const api = {
       throw new Error(data.detail || '导入失败')
     }
     return resp.json() as Promise<NoteDetail & { pages: number }>
+  },
+
+  // 批量导入 md 文件为主题笔记（新建主题后的「⬆ md」入口）
+  importMd: async (files: File[], topic: string) => {
+    const form = new FormData()
+    for (const f of files) form.append('files', f)
+    form.append('topic', topic)
+    const headers: Record<string, string> = {}
+    const token = localStorage.getItem('nl-token')
+    if (token) headers['X-Notebook-Token'] = token
+    const resp = await fetch('/api/import/md', { method: 'POST', body: form, headers })
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }))
+      throw new Error(typeof data.detail === 'string' ? data.detail : '导入失败')
+    }
+    return resp.json() as Promise<{ topic: string; imported: { file: string; path: string }[]; failed: { file: string; error: string }[] }>
   },
 
   // 读书笔记：书籍导入与梗概生成
@@ -249,6 +261,20 @@ export const api = {
   sendEmailCode: (email: string) =>
     post<{ sent: boolean; cooldown: number }>('/api/auth/email-code', { email }),
   logout: () => post<unknown>('/api/auth/logout', {}),
+}
+
+/* ---------------- 调用记录（设置 → 调用记录） ---------------- */
+
+/** 历史调用会话列表（新→旧）；q 按 flow/purpose 过滤，limit/offset 分页。 */
+export function fetchCallLogs(params: { limit?: number; offset?: number; q?: string } = {}) {
+  return http<{ entries: CallLogEntry[] }>(
+    `/api/call-logs?${qs({ limit: params.limit ?? 50, offset: params.offset ?? 0, q: params.q })}`,
+  )
+}
+
+/** 单条调用记录详情：摘要 + 完整过程事件（events 可直接传给 ProcessTimeline）。 */
+export function fetchCallLog(id: string) {
+  return http<CallLogRecord>(`/api/call-logs/${encodeURIComponent(id)}`)
 }
 
 /** 全局模型选择（TopBar 切换）：nl-model = { provider, model }；provider 为空表示跟随默认服务商。 */
@@ -321,6 +347,71 @@ export function setModelOverride(provider: string, model: string) {
     }
   })()
   return { abort: () => ctrl.abort() }
+}
+
+/* ---------------- 服务端后台 AI 任务（刷新页面后可恢复） ---------------- */
+
+export interface AiTaskInfo {
+  id: string
+  title: string
+  kind: string
+  status: string
+  chars: number
+  created_at: number
+  error?: string | null
+  result?: { saved_path?: string } | null
+}
+
+async function aiTasksReq(method: string, url: string, body?: unknown): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = localStorage.getItem('nl-token')
+  if (token) headers['X-Notebook-Token'] = token
+  const resp = await fetch(url, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '')
+    let msg = `HTTP ${resp.status}`
+    try { msg = JSON.parse(text).detail || msg } catch { /* keep */ }
+    throw new Error(msg)
+  }
+  return resp.json()
+}
+
+/** 启动服务端托管任务：生成在服务器跑，页面刷新不丢（op: generate-note / term / chat）。 */
+export async function startAiTask(title: string, kind: string, op: string, payload: unknown): Promise<AiTaskInfo> {
+  return aiTasksReq('POST', '/api/ai-tasks', { title, kind, op, payload })
+}
+
+export async function listAiTasks(): Promise<AiTaskInfo[]> {
+  const r = await aiTasksReq('GET', '/api/ai-tasks')
+  return r.tasks || []
+}
+
+export async function cancelAiTask(id: string): Promise<void> {
+  try { await aiTasksReq('POST', `/api/ai-tasks/${encodeURIComponent(id)}/cancel`) } catch { /* 已结束则忽略 */ }
+}
+
+/** 让 LLM 根据内容给笔记起标题（对话存入笔记等场景）。 */
+export async function aiNoteTitle(text: string): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = localStorage.getItem('nl-token')
+  if (token) headers['X-Notebook-Token'] = token
+  const resp = await fetch('/api/llm/note-title', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ text, ...getModelOverride() }),
+  })
+  if (!resp.ok) {
+    const t = await resp.text().catch(() => '')
+    let msg = `HTTP ${resp.status}`
+    try { msg = JSON.parse(t).detail || msg } catch { /* keep */ }
+    throw new Error(msg)
+  }
+  const r = await resp.json()
+  return r.title || ''
 }
 
 export const llmUrls = {

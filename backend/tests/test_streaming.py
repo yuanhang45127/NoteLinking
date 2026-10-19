@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import process as _process
 
 
 @pytest.fixture()
@@ -33,7 +34,7 @@ def test_term_stream(client, data_dir, monkeypatch):
         for chunk in ("特征值是", "矩阵的伸缩倍数"):
             yield chunk
 
-    monkeypatch.setattr(terms_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_note(client)
 
     r = client.post("/api/terms/stream", json={"path": "高数/矩阵.md", "term": "特征值"})
@@ -41,8 +42,11 @@ def test_term_stream(client, data_dir, monkeypatch):
     assert "text/event-stream" in r.headers["content-type"]
 
     events = _sse_events(r.text)
-    assert [e["type"] for e in events] == ["delta", "delta", "done"]
-    assert events[0]["text"] == "特征值是"
+    # 过程事件（llm_start/llm_done）穿插其中；delta 与 done 保持原协议
+    assert [e["type"] for e in events if e["type"] in ("delta", "done")] == ["delta", "delta", "done"]
+    assert events[0]["type"] == "llm_start"
+    assert events[0]["model"] == ""
+    assert [e["text"] for e in events if e["type"] == "delta"] == ["特征值是", "矩阵的伸缩倍数"]
     assert events[-1]["saved_path"] == "高数/terms/特征值.md"
     assert events[-1]["is_new"] is True
 
@@ -61,7 +65,7 @@ def test_term_stream_regenerate(client, data_dir, monkeypatch):
         calls.append(messages)
         yield "新解释"
 
-    monkeypatch.setattr(terms_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_note(client)
     client.post("/api/terms/stream", json={"path": "高数/矩阵.md", "term": "特征值"})
 
@@ -86,7 +90,7 @@ def test_exam_stream(client, data_dir, monkeypatch):
         for i in range(0, len(raw), 20):
             yield raw[i:i + 20]
 
-    monkeypatch.setattr(exams_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_note(client, "高数/数.md", "数字内容")
 
     r = client.post("/api/exams/generate/stream", json={"paths": ["高数/数.md"], "types": ["mcq"], "count": 1})
@@ -113,7 +117,7 @@ def test_checklist_stream(client, data_dir, monkeypatch):
     async def fake_stream(provider_id, messages, model="", temperature=None):
         yield raw
 
-    monkeypatch.setattr(exams_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_note(client, "高数/数.md", "数字内容")
 
     r = client.post("/api/exams/checklist/stream", json={"paths": ["高数/数.md"]})
@@ -134,7 +138,7 @@ def test_study_guide_stream(client, data_dir, monkeypatch):
         for chunk in ("## 一页速览\n", "重点是特征值。"):
             yield chunk
 
-    monkeypatch.setattr(llm_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_note(client, "高数/数.md", "数字内容")
 
     r = client.post("/api/llm/study-guide/stream", json={"paths": ["高数/数.md"]})
@@ -151,7 +155,7 @@ def test_stream_error_propagates(client, data_dir, monkeypatch):
         raise LLMError("服务商不可用")
         yield  # pragma: no cover
 
-    monkeypatch.setattr(terms_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_note(client)
     r = client.post("/api/terms/stream", json={"path": "高数/矩阵.md", "term": "特征值"})
     events = _sse_events(r.text)
@@ -172,7 +176,7 @@ def test_attempt_stream_grades_progressively(client, data_dir, monkeypatch):
     async def fake_gen(provider_id, messages, model="", temperature=None):
         yield raw
 
-    monkeypatch.setattr(exams_router, "stream_llm", fake_gen)
+    monkeypatch.setattr(_process, "stream_llm", fake_gen)
     _seed_note(client, "高数/数.md", "内容")
     r = client.post("/api/exams/generate/stream", json={"paths": ["高数/数.md"], "types": ["mcq", "short"], "count": 3})
     exam_id = _sse_events(r.text)[-1]["exam_id"]
@@ -218,7 +222,7 @@ def test_topic_architecture_stream(client, data_dir, monkeypatch):
         for chunk in ("## 现有内容盘点\n", "已有矩阵运算相关笔记。"):
             yield chunk
 
-    monkeypatch.setattr(llm_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_note(client, "机器学习/矩阵.md", "# 矩阵\n## 基础运算\n内容")
 
     r = client.post("/api/llm/topic-architecture/stream", json={"topic": "机器学习"})

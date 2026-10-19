@@ -36,7 +36,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     #  "args": ["-y", "some-search-mcp"], "env": {"API_KEY": "..."}, "enabled": true}
     # 供联网搜索 provider=mcp 与 AI 对话 mcp_tool 工具调用
     "mcp_servers": [],
-    # 联网搜索：provider 支持 tavily / brave / serper / searxng / mcp；searxng 填 base_url，
+    # 联网搜索：provider 支持 tavily / brave / serper / deepseek / searxng / mcp；searxng 填 base_url，
     # mcp 填 mcp_server（服务器 id）与 mcp_tool（工具名），其余填 api_key
     "web_search": {"enabled": False, "provider": "tavily", "api_key": "", "base_url": "", "max_results": 8,
                    "mcp_server": "", "mcp_tool": ""},

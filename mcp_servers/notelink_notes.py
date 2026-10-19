@@ -1,6 +1,6 @@
 """NoteLink MCP · 笔记与标注服务器。
 
-主题/目录树/笔记增删改查/搜索/反链/双链解析/置顶/高亮批注/PDF 导入/全库导出。
+主题/目录树/笔记增删改查/搜索/反链/双链解析/置顶/收藏/高亮批注/PDF 导入/全库导出。
 运行：python3 notelink_notes.py（stdio MCP，配置方法见同目录 README.md）
 """
 import os
@@ -153,6 +153,19 @@ def list_pinned():
 }, ["path", "pinned"])
 def set_pinned(path, pinned):
     return api_post("/api/notes/pin", {"path": path, "pinned": pinned})
+
+
+@server.tool("list_favorites", "列出全库收藏笔记。")
+def list_favorites():
+    return api_get("/api/favorites")
+
+
+@server.tool("set_favorite", "设置/取消笔记收藏。", {
+    "path": P(STR, "笔记路径"),
+    "fav": P(BOOL, "true 收藏 / false 取消"),
+}, ["path", "fav"])
+def set_favorite(path, fav):
+    return api_post("/api/notes/favorite", {"path": path, "fav": fav})
 
 
 @server.tool("set_finished", "标记/取消笔记「看完」。", {

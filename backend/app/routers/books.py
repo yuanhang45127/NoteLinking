@@ -15,7 +15,7 @@ from ..markdown_utils import ensure_frontmatter
 from ..schemas import BookNotesRequest
 from ..services import book_parser, books_store, papers_store, vault
 from ..services.books_store import FMT_MIME
-from ..services.llm_service import complete
+from ..services.process import llm_call
 from ..utils import sanitize_filename
 from .llm import sse_response
 
@@ -140,7 +140,12 @@ async def book_notes_stream(book_id: str, body: BookNotesRequest):
                     {"role": "user", "content": SUMMARY_USER.format(
                         book=book["title"], title=ch["title"], text=ch["text"][:8000])},
                 ]
-                text = await complete(provider, messages, model)
+                text = ""
+                async for ev in llm_call(provider, messages, model,
+                                         purpose=f"梗概 {i + 1}/{total} · {ch['title']}"):
+                    if ev["type"] == "delta":
+                        text += ev["text"]
+                    yield ev
                 if not text.strip():
                     raise ValueError("模型返回空内容")
                 summaries.append({"title": ch["title"], "summary": text.strip()})

@@ -4,8 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from ..schemas import TermRequest
-from ..services import term_service, vault
-from ..services.llm_service import stream_llm
+from ..services import gen_flows, term_service, vault
 from .llm import sse_response
 
 router = APIRouter(prefix="/api", tags=["terms"])
@@ -37,40 +36,23 @@ async def create_term(body: TermRequest):
 @router.post("/terms/stream")
 async def stream_term(body: TermRequest):
     """概念解释流式生成：SSE 增量输出，结束时落盘并返回 saved_path。"""
+    # 先准备（可能 404：笔记/词条不存在），再开流
     plan = await term_service.prepare_term(
         body.path, body.term, body.context_before, body.context_after, body.language
     )
-
-    async def gen():
-        buf = []
-        async for delta in stream_llm(body.provider or "", plan["messages"], body.model or ""):
-            buf.append(delta)
-            yield {"type": "delta", "text": delta}
-        saved = term_service.save_term_doc(plan, "".join(buf), regenerate=body.regenerate)
-        done = {"type": "done", "saved_path": saved["path"]}
-        for k in ("is_new", "regenerated", "appended"):
-            if k in saved:
-                done[k] = saved[k]
-        yield done
-
-    return sse_response(gen())
+    payload = body.model_dump()
+    payload["_plan"] = plan
+    return sse_response(gen_flows.term_events(payload))
 
 
 @router.post("/terms/to-note/stream")
 async def stream_term_to_note(body: TermToNoteRequest):
     """概念转完整笔记：以概念文档为底稿，从这个概念出发流式生成一篇深入讲解
     （具体解释 + 用处）的普通笔记，结束时落盘到主题根下并返回 saved_path。"""
-    plan = term_service.prepare_to_note(body.path, body.language)
-
-    async def gen():
-        buf = []
-        async for delta in stream_llm(body.provider or "", plan["messages"], body.model or ""):
-            buf.append(delta)
-            yield {"type": "delta", "text": delta}
-        saved = term_service.save_to_note(plan, "".join(buf))
-        yield {"type": "done", "saved_path": saved["path"]}
-
-    return sse_response(gen())
+    plan = term_service.prepare_to_note(body.path, body.language)  # 非词条早退 409
+    payload = body.model_dump()
+    payload["_plan"] = plan
+    return sse_response(gen_flows.term_to_note_events(payload))
 
 
 @router.get("/terms")

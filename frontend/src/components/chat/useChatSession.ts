@@ -1,13 +1,13 @@
 // AI 对话会话状态机：滑出面板（ChatDock）使用。
-// 负责会话加载、流式收发（delta/tool 事件）、停止与重新生成。
+// 负责会话加载、流式收发（delta/llm_*/tool/step 事件）、停止与重新生成。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, getModelOverride, streamUrls } from '../../api'
 import { streamTracked } from '../../lib/aiTasks'
 import { chatDock } from './chatDockSignal'
-import type { ChatSessionMeta, ChatSessionMsg, ChatToolStep } from '../../types'
+import type { ChatSessionMeta, ChatSessionMsg, LiveMsg, ProcessEvt } from '../../types'
 
 export function useChatSession(sessionId: string | null, onSessionUpdated?: (s: ChatSessionMeta) => void) {
-  const [messages, setMessages] = useState<ChatSessionMsg[]>([])
+  const [messages, setMessages] = useState<(ChatSessionMsg | LiveMsg)[]>([])
   const [meta, setMeta] = useState<ChatSessionMeta | null>(null)
   const [loading, setLoading] = useState(false)
   const [streaming, setStreaming] = useState(false)
@@ -51,10 +51,10 @@ export function useChatSession(sessionId: string | null, onSessionUpdated?: (s: 
         ? ms.slice() // 回答已由后端回退，这里只挂一条空的 assistant 消息
         : [...ms, { role: 'user' as const, content, created_at: new Date().toISOString() }]
       idxRef.current = next.length
-      return [...next, { role: 'assistant' as const, content: '', tool_steps: [] }]
+      return [...next, { role: 'assistant' as const, content: '', tool_steps: [], process: [] }]
     })
     setStreaming(true)
-    const patchLast = (fn: (m: ChatSessionMsg) => ChatSessionMsg) =>
+    const patchLast = (fn: (m: LiveMsg) => LiveMsg) =>
       setMessages((ms) => ms.map((m, k) => (k === idxRef.current ? fn(m) : m)))
 
     const ask = content.trim()
@@ -74,18 +74,9 @@ export function useChatSession(sessionId: string | null, onSessionUpdated?: (s: 
           setStreaming(false); idxRef.current = -1
         },
         onError: (msg) => { setError(msg); setStreaming(false); idxRef.current = -1 },        // error
-        onEvent: (evt) => {                                                                    // tool
-          if (evt.type !== 'tool') return
-          patchLast((m) => {
-            const steps: ChatToolStep[] = [...(m.tool_steps || [])]
-            if (evt.status === 'start') {
-              steps.push({ name: evt.name, args: evt.args, summary: '', ok: true, running: true })
-            } else {
-              const i = steps.findIndex((s) => s.running && s.name === evt.name)
-              if (i >= 0) steps[i] = { ...steps[i], summary: evt.summary || '', ok: evt.ok !== false, running: false }
-            }
-            return { ...m, tool_steps: steps }
-          })
+        onEvent: (evt) => {                                                                    // 调用过程
+          if (evt.type === 'delta' || evt.type === 'done' || evt.type === 'error') return
+          patchLast((m) => ({ ...m, process: [...(m.process || []), evt as ProcessEvt] }))
         },
       },
     )

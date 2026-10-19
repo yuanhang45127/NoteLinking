@@ -9,6 +9,8 @@
 - NOTELINK_BASE_URL  服务器地址，默认 http://127.0.0.1:8020（本机部署）；
                      自建远程服务时改成你的公网/内网入口
 - NOTELINK_TOKEN     访问令牌（服务器开启访问令牌时必填，请求头 X-Notebook-Token）
+- NOTELINK_SESSION   会话令牌（服务器多用户模式时必填，请求头 X-Session，
+                     值为网页登录后的 nl_session cookie）
 - NOTELINK_TIMEOUT   单请求超时秒数，默认 300（LLM 生成类调用较慢）
 """
 import json
@@ -20,6 +22,7 @@ import urllib.request
 
 BASE_URL = os.environ.get("NOTELINK_BASE_URL", "http://127.0.0.1:8020").rstrip("/")
 TOKEN = os.environ.get("NOTELINK_TOKEN", "")
+SESSION = os.environ.get("NOTELINK_SESSION", "")
 DEFAULT_TIMEOUT = float(os.environ.get("NOTELINK_TIMEOUT", "300"))
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -27,10 +30,17 @@ PROTOCOL_VERSION = "2025-06-18"
 
 # ---------------------------------------------------------------- HTTP 客户端
 
+# 直连（不走系统代理）：macOS 上 urllib 默认读取系统代理设置，Tailscale/内网
+# 地址会被 Clash 类代理拦截成 502 Bad Gateway，因此显式使用空 ProxyHandler。
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _headers(extra=None):
     h = {"Accept": "application/json"}
     if TOKEN:
         h["X-Notebook-Token"] = TOKEN
+    if SESSION:
+        h["X-Session"] = SESSION
     if extra:
         h.update(extra)
     return h
@@ -63,7 +73,7 @@ def api(method, path, params=None, body=None, timeout=None, raw=False):
         extra = {"Content-Type": "application/json"}
     req = urllib.request.Request(url, data=data, method=method, headers=_headers(extra))
     try:
-        with urllib.request.urlopen(req, timeout=timeout or DEFAULT_TIMEOUT) as r:
+        with _OPENER.open(req, timeout=timeout or DEFAULT_TIMEOUT) as r:
             payload = r.read()
     except (urllib.error.HTTPError, urllib.error.URLError) as e:
         raise RuntimeError(_error_message(e)) from None

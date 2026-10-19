@@ -107,6 +107,73 @@ def test_pin_note(data_dir):
         vault.set_pinned("不存在/缺失.md", True)
 
 
+def test_favorite_note(data_dir):
+    """收藏：写 frontmatter fav 键，列表跨主题按更新时间倒序，取消后键被移除。"""
+    import os
+    from datetime import datetime
+
+    from app.config import get_vault_dir
+
+    _seed()
+    vault.create_topic("AI for Law")
+    note = "高等数学/极限与连续.md"
+    term = "高等数学/terms/洛必达法则.md"
+
+    vault.set_favorite(note, True)
+    vault.set_favorite(term, True)
+    assert {p["path"] for p in vault.list_favorites()} == {note, term}
+
+    from app.markdown_utils import parse_frontmatter
+    fm, _ = parse_frontmatter(vault.read_note(note)["content"])
+    assert fm["fav"] is True  # 收藏键写入 frontmatter
+
+    # 置顶与收藏互不影响
+    vault.set_pinned(note, True)
+    assert {p["path"] for p in vault.list_pinned()} == {note}
+    assert {p["path"] for p in vault.list_favorites()} == {note, term}
+
+    # 按更新时间倒序（固定 mtime，保证跨秒断言稳定）
+    root = get_vault_dir()
+    os.utime(root / note, (1_000_000, 1_000_000))
+    os.utime(root / term, (2_000_000, 2_000_000))
+    favs = vault.list_favorites()
+    assert [p["path"] for p in favs] == [term, note]
+    assert favs[0]["updated_at"] == datetime.fromtimestamp(2_000_000).isoformat(timespec="seconds")
+
+    vault.set_favorite(note, False)
+    fm2, _ = parse_frontmatter(vault.read_note(note)["content"])
+    assert "fav" not in fm2
+    assert [p["path"] for p in vault.list_favorites()] == [term]
+
+    with pytest.raises(HTTPException):
+        vault.set_favorite("不存在/缺失.md", True)
+
+
+def test_tree_node_updated_at(data_dir):
+    """目录树 note/term 节点带 updated_at（ISO 到秒，与置顶/收藏列表同格式）。"""
+    import os
+    from datetime import datetime
+
+    _seed()
+    rel = "高等数学/极限与连续.md"
+    from app.config import get_vault_dir
+    os.utime(get_vault_dir() / rel, (1_700_000_000, 1_700_000_000))
+
+    def find(nodes, path):
+        for n in nodes:
+            if n["path"] == path:
+                return n
+            if n.get("children"):
+                r = find(n["children"], path)
+                if r:
+                    return r
+
+    node = find(vault.get_tree("高等数学")["children"], rel)
+    assert node["updated_at"] == datetime.fromtimestamp(1_700_000_000).isoformat(timespec="seconds")
+    term = find(vault.get_tree("高等数学")["children"], "高等数学/terms/洛必达法则.md")
+    assert term["updated_at"]
+
+
 def test_finish_note(data_dir):
     """看完标记：写 frontmatter finished，树节点带 finished 标志，取消后全部清除。"""
     from app.markdown_utils import parse_frontmatter

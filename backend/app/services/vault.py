@@ -155,6 +155,7 @@ def _tree_node(vault: Path, path: Path) -> Dict:
                         "type": "term" if fm.get("type") == "term" else "note",
                         "title": fm.get("title") or child.stem,
                         "finished": bool(fm.get("finished")),
+                        "updated_at": datetime.datetime.fromtimestamp(child.stat().st_mtime).isoformat(timespec="seconds"),
                     }
                 )
         node["children"] = children
@@ -168,14 +169,14 @@ def _read_text(path: Path) -> str:
         return ""
 
 
-# ---------------------------------------------------------------- 置顶 / 看完标记
-def list_pinned() -> List[Dict]:
-    """全库扫描 frontmatter 里 pinned: true 的笔记（跨主题，按更新时间倒序）。"""
+# ---------------------------------------------------------------- 置顶 / 收藏 / 看完标记
+def _list_fm_flag(key: str) -> List[Dict]:
+    """全库扫描 frontmatter 里指定布尔键为 true 的笔记（跨主题，按更新时间倒序）。"""
     vault = get_vault_dir()
     out = []
     for p in _iter_md(vault):
         fm, _ = parse_frontmatter(_read_text(p))
-        if not fm.get("pinned"):
+        if not fm.get(key):
             continue
         rel = p.relative_to(vault).as_posix()
         out.append(
@@ -191,6 +192,16 @@ def list_pinned() -> List[Dict]:
         )
     out.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
     return out
+
+
+def list_pinned() -> List[Dict]:
+    """全库扫描 frontmatter 里 pinned: true 的笔记（跨主题，按更新时间倒序）。"""
+    return _list_fm_flag("pinned")
+
+
+def list_favorites() -> List[Dict]:
+    """全库扫描 frontmatter 里 fav: true 的笔记（跨主题，按更新时间倒序）。"""
+    return _list_fm_flag("fav")
 
 
 def _set_fm_flag(rel: str, key: str, value: bool) -> Dict:
@@ -211,6 +222,11 @@ def _set_fm_flag(rel: str, key: str, value: bool) -> Dict:
 def set_pinned(rel: str, pinned: bool) -> Dict:
     """设置/取消笔记置顶（frontmatter pinned 键）。"""
     return _set_fm_flag(rel, "pinned", pinned)
+
+
+def set_favorite(rel: str, fav: bool) -> Dict:
+    """设置/取消笔记收藏（frontmatter fav 键）。"""
+    return _set_fm_flag(rel, "fav", fav)
 
 
 def set_finished(rel: str, finished: bool) -> Dict:

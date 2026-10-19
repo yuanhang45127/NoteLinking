@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, getModelOverride, llmUrls, streamUrls } from '../api'
 import { useApp } from '../store'
-import type { Attempt, ChatMsg, Checklist, Exam, Goal, Question, TreeNode } from '../types'
+import type { Attempt, ChatMsg, Checklist, Exam, Goal, ProcessEvt, Question, TreeNode } from '../types'
 import Modal from '../components/Modal'
+import ProcessTimeline from '../components/ProcessTimeline'
 import StreamMd from '../components/StreamMd'
 import { renderMarkdown } from '../lib/md'
 import { streamTracked } from '../lib/aiTasks'
@@ -31,7 +32,7 @@ export default function ExamPage() {
   const [guideOpen, setGuideOpen] = useState<string | null>(null)
   const [checklistOpen, setChecklistOpen] = useState(false)
   const [quizModal, setQuizModal] = useState<null | 'smart' | 'mock'>(null)
-  const [genState, setGenState] = useState<{ label: string; text: string } | null>(null)
+  const [genState, setGenState] = useState<{ label: string; text: string; proc: ProcessEvt[] } | null>(null)
   // 「后台」隐藏生成弹窗但保留 genState（字数继续累计），经悬浮窗「前台」恢复
   const [genHidden, setGenHidden] = useState(false)
   const genHiddenRef = useRef(genHidden)
@@ -81,7 +82,7 @@ export default function ExamPage() {
     if (!selectedPaths.length) { toast('请先勾选至少一份资料', 'err'); return }
     setBusy(true)
     setGenHidden(false)
-    setGenState({ label: opts.label, text: '' })
+    setGenState({ label: opts.label, text: '', proc: [] })
     streamTracked({ title: `${opts.label} · 出题`, kind: 'exam', foreground: () => setGenHidden(false) },
       streamUrls.examGenerate, {
         paths: selectedPaths, types: opts.types, count: opts.count,
@@ -89,6 +90,11 @@ export default function ExamPage() {
       },
       {
         onDelta: (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+        onEvent: (evt) => {
+          if (evt.type !== 'delta' && evt.type !== 'done' && evt.type !== 'error' && evt.type !== 'grade') {
+            setGenState((s) => (s ? { ...s, proc: [...s.proc, evt] } : s))
+          }
+        },
         onDone: async (evt) => {
           setGenState(null); setGenHidden(false); setBusy(false)
           if (!evt?.exam_id) { toast('生成失败，请重试', 'err'); return }
@@ -136,11 +142,16 @@ export default function ExamPage() {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
     setGenHidden(false)
-    setGenState({ label: '考点清单', text: '' })
+    setGenState({ label: '考点清单', text: '', proc: [] })
     streamTracked({ title: '考点清单', kind: 'exam', foreground: () => setGenHidden(false) },
       streamUrls.checklist, { paths: selectedPaths, stream: true, ...getModelOverride() },
       {
         onDelta: (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+        onEvent: (evt) => {
+          if (evt.type !== 'delta' && evt.type !== 'done' && evt.type !== 'error' && evt.type !== 'grade') {
+            setGenState((s) => (s ? { ...s, proc: [...s.proc, evt] } : s))
+          }
+        },
         onDone: (evt) => {
           setGenState(null); setGenHidden(false); setBusy(false)
           if (!evt?.checklist) { toast('生成失败，请重试', 'err'); return }
@@ -156,11 +167,16 @@ export default function ExamPage() {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
     setGenHidden(false)
-    setGenState({ label: '学习指南', text: '' })
+    setGenState({ label: '学习指南', text: '', proc: [] })
     streamTracked({ title: '学习指南', kind: 'exam', foreground: () => setGenHidden(false) },
       streamUrls.studyGuide, { paths: selectedPaths, stream: true, ...getModelOverride() },
       {
         onDelta: (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+        onEvent: (evt) => {
+          if (evt.type !== 'delta' && evt.type !== 'done' && evt.type !== 'error' && evt.type !== 'grade') {
+            setGenState((s) => (s ? { ...s, proc: [...s.proc, evt] } : s))
+          }
+        },
         onDone: (evt) => {
           setGenState(null); setGenHidden(false); setBusy(false)
           if (!evt?.markdown) { toast('生成失败，请重试', 'err'); return }
@@ -176,7 +192,7 @@ export default function ExamPage() {
     if (!selectedPaths.length) { toast('请先勾选资料', 'err'); return }
     setBusy(true)
     setGenHidden(false)
-    setGenState({ label: '记忆闪卡', text: '' })
+    setGenState({ label: '记忆闪卡', text: '', proc: [] })
     streamTracked({ title: '记忆闪卡', kind: 'exam', foreground: () => setGenHidden(false) },
       streamUrls.examGenerate, {
         paths: selectedPaths, types: ['flashcard'], count: 8,
@@ -184,6 +200,11 @@ export default function ExamPage() {
       },
       {
         onDelta: (t) => setGenState((s) => (s ? { ...s, text: s.text + t } : s)),
+        onEvent: (evt) => {
+          if (evt.type !== 'delta' && evt.type !== 'done' && evt.type !== 'error' && evt.type !== 'grade') {
+            setGenState((s) => (s ? { ...s, proc: [...s.proc, evt] } : s))
+          }
+        },
         onDone: async (evt) => {
           setGenState(null); setGenHidden(false); setBusy(false)
           if (!evt?.exam_id) { toast('生成失败，请重试', 'err'); return }
@@ -329,6 +350,7 @@ export default function ExamPage() {
               <button className="btn" title="收起弹窗，生成继续在右下角悬浮窗里跑" onClick={() => setGenHidden(true)}>后台</button>
             </>
           }>
+          <ProcessTimeline events={genState.proc} running />
           <div className={`stream-box ${!genState.text ? 'loading-dot' : ''}`} style={{ maxHeight: 420, overflow: 'auto' }}>
             <StreamMd text={genState.text} streaming />
           </div>

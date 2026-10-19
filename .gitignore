@@ -30,3 +30,6 @@ Thumbs.db
 
 # TS 构建增量缓存
 tsconfig.tsbuildinfo
+
+# 手工编辑备份（形如 xxx.ts.bak-20261014-232507）
+*.bak*

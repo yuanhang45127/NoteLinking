@@ -1,20 +1,16 @@
-// AI 对话核心组件：消息流 + 工具调用步骤 + 划选存入 + 输入区（@引用 / 拖拽笔记）。
+// AI 对话核心组件：消息流 + 调用过程（模型/工具调用时间线）+ 划选存入 + 输入区（@引用 / 拖拽笔记）。
 // 右侧滑出面板（ChatDock）使用，compact 模式收窄留白。
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../../api'
 import { useApp } from '../../store'
-import type { ChatSessionMeta, ChatToolStep } from '../../types'
+import type { ChatSessionMeta, ChatToolStep, LiveMsg } from '../../types'
 import { listHeadings } from '../../lib/contentEdit'
 import { CHAT_REFERENCE_EVENT, TEXT_REF_PREFIX, chatDock } from './chatDockSignal'
 import StreamMd from '../StreamMd'
+import ProcessTimeline, { TOOL_LABEL } from '../ProcessTimeline'
 import SaveToNoteModal from './SaveToNoteModal'
 import { useChatSession } from './useChatSession'
-
-const TOOL_LABEL: Record<string, string> = {
-  list_topics: '列出主题', search_notes: '搜索笔记', read_note: '读取笔记',
-  create_note: '新建笔记', append_to_note: '追加内容', move_note: '移动笔记',
-}
 
 const SUGGESTIONS = [
   '帮我看看库里的主题，给 AI4EDA 定一份学习路线',
@@ -59,7 +55,7 @@ export default function ChatConversation({ sessionId, compact, onSessionUpdated 
   // @ 二级选择：先选笔记，再选「整篇」或某个章节（chunk）
   const [mentionNote, setMentionNote] = useState<MentionNote | null>(null)
   const [selPop, setSelPop] = useState<{ x: number; y: number; text: string } | null>(null)
-  const [saveTarget, setSaveTarget] = useState<{ content: string; title?: string } | null>(null)
+  const [saveTarget, setSaveTarget] = useState<string | null>(null)
 
   const taRef = useRef<HTMLTextAreaElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -201,14 +197,16 @@ export default function ChatConversation({ sessionId, compact, onSessionUpdated 
           ) : (
             <div key={i} className="msg ai">
               <div className="bubble">
-                {(m.tool_steps?.length || 0) > 0 && <ToolSteps steps={m.tool_steps!} />}
+                {(m as LiveMsg).process?.length
+                  ? <ProcessTimeline events={(m as LiveMsg).process!} running={streaming && i === messages.length - 1} />
+                  : ((m.tool_steps?.length || 0) > 0 && <ToolSteps steps={m.tool_steps!} />)}
                 {m.content
                   ? <StreamMd text={m.content} streaming={streaming && i === messages.length - 1} />
                   : (streaming && i === messages.length - 1 ? <span className="loading-dot" /> : null)}
                 {!streaming && m.content && (
                   <div className="chat-msg-ops">
                     <button className="btn text" onClick={() => copyText(m.content)}>复制</button>
-                    <button className="btn text" onClick={() => setSaveTarget({ content: m.content, title: m.note_title })}>存为笔记</button>
+                    <button className="btn text" onClick={() => setSaveTarget(m.content)}>存为笔记</button>
                     {i === lastAssistantIdx && (
                       <button className="btn text" onClick={() => send('', [], true)} disabled={streaming}>重新生成</button>
                     )}
@@ -225,7 +223,7 @@ export default function ChatConversation({ sessionId, compact, onSessionUpdated 
         <div className="sel-popover" style={{ left: selPop.x, top: selPop.y, transform: 'translateX(-50%)' }}>
           <div className="hint">已选中 {selPop.text.length} 个字</div>
           <div className="btns">
-            <button className="btn primary small" onClick={() => { setSaveTarget({ content: selPop.text }); setSelPop(null) }}>存入笔记</button>
+            <button className="btn primary small" onClick={() => { setSaveTarget(selPop.text); setSelPop(null) }}>存入笔记</button>
             <button className="btn small" onClick={() => { copyText(selPop.text); setSelPop(null) }}>复制</button>
           </div>
         </div>
@@ -299,8 +297,7 @@ export default function ChatConversation({ sessionId, compact, onSessionUpdated 
       </div>
 
       {saveTarget !== null && (
-        <SaveToNoteModal content={saveTarget.content} suggestedTitle={saveTarget.title}
-          onClose={() => setSaveTarget(null)} toast={toast} />
+        <SaveToNoteModal content={saveTarget} onClose={() => setSaveTarget(null)} toast={toast} />
       )}
     </div>
   )
@@ -317,6 +314,9 @@ function ToolSteps({ steps }: { steps: ChatToolStep[] }) {
             {s.summary && <span className="t-summary">{s.summary}</span>}
           </summary>
           <pre>{JSON.stringify(s.args, null, 2)}</pre>
+          {s.result && (
+            <div className="proc-detail"><span className="p-dlabel">结果</span><pre>{s.result}</pre></div>
+          )}
         </details>
       ))}
     </div>

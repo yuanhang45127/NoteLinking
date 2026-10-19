@@ -22,6 +22,11 @@ class NotePin(BaseModel):
     pinned: bool
 
 
+class NoteFav(BaseModel):
+    path: str
+    fav: bool
+
+
 class NoteFinish(BaseModel):
     path: str
     finished: bool
@@ -79,6 +84,18 @@ def pinned_notes():
 def pin_note(body: NotePin):
     """设置/取消某篇笔记的置顶（写 frontmatter）。"""
     return vault.set_pinned(body.path, body.pinned)
+
+
+@router.get("/favorites")
+def favorite_notes():
+    """全库收藏笔记（跨主题，按更新时间倒序）。"""
+    return {"favorites": vault.list_favorites()}
+
+
+@router.post("/notes/favorite")
+def favorite_note(body: NoteFav):
+    """设置/取消某篇笔记的收藏（写 frontmatter）。"""
+    return vault.set_favorite(body.path, body.fav)
 
 
 @router.post("/notes/finish")

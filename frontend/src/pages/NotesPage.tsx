@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { api, getModelOverride, llmUrls } from '../api'
+import { api, getModelOverride } from '../api'
 import { useApp } from '../store'
 import type { NoteDetail, Settings, TreeNode } from '../types'
 import ReaderView from '../components/ReaderView'
 import Modal from '../components/Modal'
 import StreamMd from '../components/StreamMd'
-import { streamTracked } from '../lib/aiTasks'
+import { streamTrackedDetached } from '../lib/aiTasks'
 
 export default function NotesPage() {
   const { activeTopic, treeTopic, tree, refreshTree, refreshTopics, settings, toast } = useApp()
@@ -162,9 +162,9 @@ function GenerateModal({ topic, settings, onClose, onCreated, toast }: {
   const start = () => {
     if (!canStart) return
     setRunning(true); setText('')
-    ctrlRef.current = streamTracked(
+    ctrlRef.current = streamTrackedDetached(
       { title: `生成笔记 · ${safeTitle}`, kind: 'note', foreground },
-      llmUrls.generateNote, {
+      'generate-note', {
         topic, prompt: prompt.trim(), title: safeTitle, stream: true,
         save_path: `${topic}/${safeTitle}.md`,
         use_web: useWeb,

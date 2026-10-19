@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import process as _process
 from app.routers import llm as llm_router
 from app.services import chat_agent, vault, websearch_service
 from app.services.settings_store import load_settings, update_settings
@@ -425,7 +426,7 @@ def test_generate_note_stream_use_web_backfills_links(client, monkeypatch):
     async def fake_stream(provider_id, messages, model="", temperature=None):
         yield "定义参见 https://baike.com/极限"
 
-    monkeypatch.setattr(llm_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     r = client.post("/api/llm/generate-note", json={
         "topic": "高数", "prompt": "写极限", "stream": True,
         "save_path": "高数/极限.md", "use_web": True,
@@ -496,7 +497,7 @@ def test_study_guide_use_web_injects_messages(client, monkeypatch):
     async def fake_stream(provider_id, messages, model="", temperature=None):
         yield "## 一页速览"
 
-    monkeypatch.setattr(llm_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     r = client.post("/api/llm/study-guide/stream", json={"paths": ["高数/极限.md"], "use_web": True})
     assert r.status_code == 200
     assert _sse_events(r.text)[-1]["markdown"] == "## 一页速览"
@@ -513,7 +514,7 @@ def test_topic_architecture_use_web_injects_messages(client, monkeypatch):
         seen["messages"] = messages
         yield "## 现有内容盘点"
 
-    monkeypatch.setattr(llm_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     r = client.post("/api/llm/topic-architecture/stream", json={"topic": "机器学习", "use_web": True})
     assert r.status_code == 200
     assert "以下是联网搜索到的最新资料" in seen["messages"][-1]["content"]

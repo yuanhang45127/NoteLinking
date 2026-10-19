@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, getModelOverride, llmUrls } from '../api'
+import { api, getModelOverride } from '../api'
 import { useApp } from '../store'
-import type { Annotation, NoteDetail, NoteLinkItem } from '../types'
+import type { Annotation, NoteDetail, NoteLinkItem, ProcessEvt } from '../types'
 import { applyHighlights, applyInlineComments, selectionInfo } from '../lib/highlight'
 import { applySelectionEdit, deleteSectionAt } from '../lib/contentEdit'
 import { sendChatReference, sendChatTextRef } from './chat/chatDockSignal'
-import { streamTracked } from '../lib/aiTasks'
+import { streamTrackedDetached } from '../lib/aiTasks'
 import { renderMarkdown, stripFrontAndH1 } from '../lib/md'
 import type { TocItem } from '../lib/md'
 import Modal from './Modal'
 import BookPane from './BookPane'
+import ProcessTimeline from './ProcessTimeline'
 import StreamMd from './StreamMd'
 import TermStreamModal from './TermStreamModal'
 import VoiceNote from './VoiceNote'
@@ -71,8 +72,10 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
   // 弹层
   const [sel, setSel] = useState<{ x: number; y: number; quote: string; prefix: string; suffix: string } | null>(null)
   const [hover, setHover] = useState<{ x: number; y: number; up: boolean; target: string; kind: 'term' | 'note'; found: boolean; summary: string; path: string } | null>(null)
-  const [annMenu, setAnnMenu] = useState<{ x: number; y: number; id: string; comment: string; quote: string; created_at?: string; mode: 'view' | 'edit' } | null>(null)
+  const [annMenu, setAnnMenu] = useState<{ x: number; y: number; id: string; comment: string; quote: string; created_at?: string; mode: 'view' | 'edit'; docked: boolean } | null>(null)
   const [regenOpen, setRegenOpen] = useState(false)
+  // 重新生成期间：AI 流式输出实时替换正文显示（仅显示层，落盘在生成完成时自动进行）
+  const [liveBody, setLiveBody] = useState<string | null>(null)
   const [continueOpen, setContinueOpen] = useState(false)
   const [voiceOpen, setVoiceOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -90,12 +93,39 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     [note],
   )
 
+  // 点击正文图片 → 全屏预览（lightbox），Esc 或点击遮罩关闭
+  const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null)
+  useEffect(() => {
+    if (!zoom) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setZoom(null)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [zoom])
+
   useEffect(() => {
     const el = bodyRef.current
     if (!el) return
-    const html = renderMarkdown(stripFrontAndH1(note.content))
+    const noteDir = note.path.split('/').slice(0, -1).join('/')
+    let html: string
+    try {
+      html = renderMarkdown(stripFrontAndH1(liveBody ?? note.content), noteDir)
+    } catch {
+      // 流式半截LaTeX等极端情况兜底：退回纯文本，保证阅读页不冻结（与 StreamMd 同思路）
+      const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      html = `<p>${esc(stripFrontAndH1(liveBody ?? note.content))}</p>`
+    }
     const toc: TocItem[] = (renderMarkdown as any).lastToc
     el.innerHTML = html
+    // 图片点击放大（事件委托，不干扰正文已有的点击行为）
+    const onImgClick = (e: Event) => {
+      const t = e.target as HTMLElement
+      if (t instanceof HTMLImageElement) {
+        e.preventDefault()
+        e.stopPropagation()
+        setZoom({ src: t.getAttribute('src') || t.src, alt: t.alt })
+      }
+    }
+    el.addEventListener('click', onImgClick)
     autoLinkConcepts(el, conceptNames)
     applyHighlights(el, note.annotations)
     applyInlineComments(el, note.annotations)
@@ -116,62 +146,11 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
     }
     const scroller = wrapRef.current?.closest('.page-scroll')
     scroller?.addEventListener('scroll', onScroll)
-    return () => scroller?.removeEventListener('scroll', onScroll)
-  }, [note, conceptNames])
-
-  /* ---------- 阅读进度：服务端记忆，打开时定位到上次位置，滚动时节流回写 ---------- */
-  const restoredPathRef = useRef('')
-  const lastSavedRef = useRef(NaN)
-  useEffect(() => {
-    const path = note.path
-    const scrollerEl = () => wrapRef.current?.closest('.page-scroll') as HTMLElement | null
-    const curHeadingId = () => {
-      let cur = ''
-      bodyRef.current?.querySelectorAll('h2[id], h3[id]').forEach((h) => {
-        if ((h as HTMLElement).getBoundingClientRect().top < 140) cur = h.id
-      })
-      return cur
-    }
-    const save = (el: HTMLElement | null) => {
-      if (!el) return
-      const max = el.scrollHeight - el.clientHeight
-      if (max <= 0) return
-      const ratio = Math.min(1, Math.max(0, el.scrollTop / max))
-      if (Math.abs(ratio - lastSavedRef.current) < 0.005) return
-      lastSavedRef.current = ratio
-      api.saveReadProgress(path, ratio, curHeadingId()).catch(() => { /* 进度保存失败不打扰阅读 */ })
-    }
-
-    // 恢复：每篇笔记打开时拉一次（切换/重开都生效，不用本地缓存）
-    if (restoredPathRef.current !== path) {
-      restoredPathRef.current = path
-      lastSavedRef.current = NaN
-      let cancelled = false
-      ;(async () => {
-        try {
-          const pos = await api.getReadProgress(path)
-          const el = scrollerEl()
-          if (cancelled || !el || !(pos.ratio > 0.02)) return
-          const apply = () => { el.scrollTop = pos.ratio * (el.scrollHeight - el.clientHeight) }
-          apply()
-          // 图片/KaTeX 异步撑开页面后各校准一次
-          window.setTimeout(() => { if (!cancelled) apply() }, 400)
-          window.setTimeout(() => { if (!cancelled) apply() }, 1000)
-        } catch { /* 拉不到就不定位 */ }
-      })()
-    }
-
-    // 回写：滚动停止 800ms 后保存；切换笔记/卸载时最后落一次
-    let timer = 0
-    const onScroll = () => { window.clearTimeout(timer); timer = window.setTimeout(() => save(scrollerEl()), 800) }
-    const el = scrollerEl()
-    el?.addEventListener('scroll', onScroll)
     return () => {
-      window.clearTimeout(timer)
-      el?.removeEventListener('scroll', onScroll)
-      save(el)
+      scroller?.removeEventListener('scroll', onScroll)
+      el.removeEventListener('click', onImgClick)
     }
-  }, [note.path])
+  }, [note, conceptNames, liveBody])
 
   /* ---------- 划选 → 弹窗 ---------- */
   const onMouseUp = (e: React.MouseEvent) => {
@@ -296,9 +275,24 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
       const id = mark.dataset.annId!
       const ann = note.annotations.find((x) => x.id === id)
       const rect = mark.getBoundingClientRect()
-      const wrap = wrapRef.current!.getBoundingClientRect()
+      const wrapEl = wrapRef.current!
+      const wrap = wrapEl.getBoundingClientRect()
+      // 停靠到正文左侧留白区：卡右缘落在 .reader 左边界内 ~40px（48px 内边距的左侧），
+      // 且 ann-card 层级低于正文，绝不盖住正文
+      const dock = Math.max(-260, 16 - wrap.left)
+      // 兜底：不能越过滚动容器左边界，否则超出部分会被 .page-scroll 的 overflow:auto 裁掉
+      // （侧边栏在流内时尤其明显），保证卡片始终留在可见区域内
+      const scRect = wrapEl.closest('.page-scroll')?.getBoundingClientRect()
+      const minX = scRect ? 16 - (wrap.left - scRect.left) : dock
+      // 只有留白区（.reader 左边距到滚动容器左缘的距离 + 48px 内边距 ≥ 316px）完整放得下
+      // 整张卡（右缘不压到正文）时才停靠：否则卡片会压进正文、被 z-index:2 的 .md-body 盖住，
+      // 按钮点不到（侧边栏在流内的中等宽度屏幕即是如此）——放不下时退回贴住高亮、
+      // 层级高于正文的普通悬浮卡（转换前行为）
+      const docked = !!scRect && wrap.left - scRect.left >= 268
       setAnnMenu({
-        x: rect.left - wrap.left, y: rect.bottom - wrap.top + 6, id,
+        x: docked ? Math.max(dock, minX) : rect.left - wrap.left,
+        y: docked ? rect.top - wrap.top : rect.bottom - wrap.top + 6,
+        docked, id,
         comment: ann?.comment || '', quote: ann?.quote || '',
         created_at: ann?.created_at, mode: 'view',
       })
@@ -510,7 +504,10 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
 
         {/* 批注弹卡：点高亮直接显示批注信息，编辑时切换输入态 */}
         {annMenu && (
-          <div className="hover-card" style={{ left: annMenu.x, top: annMenu.y, transform: 'translateX(-30%)', width: 300 }}>
+          <div className={annMenu.docked ? 'hover-card ann-card' : 'hover-card'}
+            style={annMenu.docked
+              ? { left: annMenu.x, top: annMenu.y, width: 300 }
+              : { left: annMenu.x, top: annMenu.y, transform: 'translateX(-30%)', width: 300 }}>
             <div className="hc-head" style={{ fontSize: 13.5 }}>我的批注</div>
             {annMenu.quote && (
               <div className="ann-quote">「{annMenu.quote.length > 80 ? annMenu.quote.slice(0, 80) + '…' : annMenu.quote}」</div>
@@ -556,7 +553,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
             contextAfter={termGen.ctxAfter}
             regenerate={termGen.regenerate}
             onClose={() => setTermGen(null)}
-            onDone={(p) => { setTermGen(null); onOpenConcept(p) }}
+            onDone={async () => { setTermGen(null); toast('概念已生成，正文已实时更新'); await reload() }}
           />
         )}
 
@@ -574,7 +571,7 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
 
         {/* 重新生成 */}
         {regenOpen && (
-          <RegenModal note={note} settings={settings} onClose={() => setRegenOpen(false)} onDone={async () => { setRegenOpen(false); await reload() }} toast={toast} />
+          <RegenModal note={note} settings={settings} onClose={() => { setRegenOpen(false); setLiveBody(null) }} onDone={async () => { setRegenOpen(false); setLiveBody(null); await reload() }} onLive={setLiveBody} toast={toast} />
         )}
 
         {/* 编辑 Markdown 源码（仅未锁定笔记） */}
@@ -687,6 +684,12 @@ export default function ReaderView({ note, settings, reload, onOpenConcept, toas
             }} />
         </div>
       </aside>
+      {zoom && (
+        <div className="img-lightbox" onClick={() => setZoom(null)}>
+          <img src={zoom.src} alt={zoom.alt} />
+          {zoom.alt && <div className="img-lightbox-alt">{zoom.alt}</div>}
+        </div>
+      )}
     </div>
   )
 }
@@ -834,26 +837,51 @@ function SourceEditModal({ note, onClose, onDone, toast }: { note: NoteDetail; o
 }
 
 /* ---------- 重新生成弹窗 ---------- */
-function RegenModal({ note, settings, onClose, onDone, toast }: { note: NoteDetail; settings: ReturnType<typeof useApp>['settings']; onClose: () => void; onDone: () => void; toast: any }) {
+function RegenModal({ note, settings, onClose, onDone, onLive, toast }: { note: NoteDetail; settings: ReturnType<typeof useApp>['settings']; onClose: () => void; onDone: () => void; onLive?: (t: string | null) => void; toast: any }) {
   const [prompt, setPrompt] = useState(`请围绕「${note.title}」重写本篇笔记：结构更清晰，保留原文的公式与概念链接。`)
   const [text, setText] = useState('')
   const [running, setRunning] = useState(false)
   const [bg, setBg] = useState(false)
   const [useWeb, setUseWeb] = useState(false)
+  const [proc, setProc] = useState<ProcessEvt[]>([])
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
+  // 流式输出经 onLive 实时同步到阅读页正文；完成时自动落盘替换并刷新
+  const accRef = useRef('')
+  const liveRef = useRef(onLive)
+  liveRef.current = onLive
+  const saveAndClose = async () => {
+    try {
+      // 重新生成属于 AI 整篇替换：走覆盖创建，绕开生成笔记的编辑锁
+      await api.createNote(note.path, note.content.startsWith('---')
+        ? note.content.slice(0, note.content.indexOf('---', 3) + 4) + '\n\n' + accRef.current + '\n'
+        : `# ${note.title}\n\n` + accRef.current + '\n', true)
+      liveRef.current?.(null)
+      toast('已生成并替换正文 ✓')
+      onDone()
+    } catch (e: any) { toast(e.message, 'err'); setRunning(false) }
+  }
   const start = () => {
-    setRunning(true); setText('')
-    ctrlRef.current = streamTracked(
+    setRunning(true); setText(''); accRef.current = ''; setProc([])
+    ctrlRef.current = streamTrackedDetached(
       { title: `重写笔记 · ${note.title}`, kind: 'note', foreground: () => setBg(false) },
-      llmUrls.generateNote, {
+      'generate-note', {
         topic: note.topic, prompt, title: note.title, stream: true,
         use_web: useWeb,
         ...getModelOverride(),
       },
       {
-        onDelta: (t) => setText((s) => s + t),
-        onDone: () => setRunning(false),
-        onError: (msg) => { setRunning(false); toast(msg, 'err') },
+        onDelta: (t) => {
+          accRef.current += t
+          setText(accRef.current)
+          liveRef.current?.(accRef.current) // 页面正文实时更新
+        },
+        onEvent: (evt) => {
+          if (evt.type !== 'delta' && evt.type !== 'done' && evt.type !== 'error') {
+            setProc((p) => [...p, evt])
+          }
+        },
+        onDone: () => { saveAndClose() }, // 生成完成即自动替换正文并刷新页面
+        onError: (msg) => { liveRef.current?.(null); setRunning(false); toast(msg, 'err') },
       })
   }
   if (bg) return null
@@ -864,16 +892,7 @@ function RegenModal({ note, settings, onClose, onDone, toast }: { note: NoteDeta
           {!running && !text && <button className="btn primary" style={{ marginRight: 'auto' }} onClick={start}>开始生成</button>}
           {running && <button className="btn" style={{ marginRight: 'auto' }} title="收起弹窗，生成继续在右下角悬浮窗里跑" onClick={() => setBg(true)}>后台</button>}
           {text && (
-            <button className="btn primary" disabled={running} style={{ marginRight: 'auto' }} onClick={async () => {
-              try {
-                const { stripFrontAndH1 } = await import('../lib/md')
-                // 重新生成属于 AI 整篇替换：走覆盖创建，绕开生成笔记的编辑锁
-                await api.createNote(note.path, note.content.startsWith('---')
-                  ? note.content.slice(0, note.content.indexOf('---', 3) + 4) + '\n\n' + text + '\n'
-                  : `# ${note.title}\n\n` + text + '\n', true)
-                toast('已替换正文'); onDone()
-              } catch (e: any) { toast(e.message, 'err') }
-            }}>应用并保存</button>
+            <button className="btn primary" disabled={running} style={{ marginRight: 'auto' }} onClick={() => saveAndClose()}>应用并保存</button>
           )}
           <button className="btn" onClick={() => { ctrlRef.current?.abort(); onClose() }}>关闭</button>
         </>
@@ -895,6 +914,7 @@ function RegenModal({ note, settings, onClose, onDone, toast }: { note: NoteDeta
           <StreamMd text={text} streaming={running} />
         </div>
       )}
+      {proc.length > 0 && <ProcessTimeline events={proc} running={running} />}
     </Modal>
   )
 }
@@ -904,12 +924,13 @@ function ContinueModal({ note, onClose, onDone, toast }: { note: NoteDetail; onC
   const [text, setText] = useState('')
   const [running, setRunning] = useState(true)
   const [bg, setBg] = useState(false)
+  const [proc, setProc] = useState<ProcessEvt[]>([])
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
   useEffect(() => {
     const tail = note.content.slice(-1500)
-    const t = streamTracked(
+    const t = streamTrackedDetached(
       { title: `续写笔记 · ${note.title}`, kind: 'note', foreground: () => setBg(false) },
-      llmUrls.chat, {
+      'chat', {
         messages: [
           { role: 'system', content: '你是学习笔记作者。根据笔记已有内容自然续写，输出 Markdown 正文，公式用 LaTeX，不要重复已有内容。' },
           { role: 'user', content: `请续写笔记《${note.title}》的下一节内容。已有内容结尾如下：\n\n...${tail}` },
@@ -918,6 +939,11 @@ function ContinueModal({ note, onClose, onDone, toast }: { note: NoteDetail; onC
       },
       {
         onDelta: (x) => setText((s) => s + x),
+        onEvent: (evt) => {
+          if (evt.type !== 'delta' && evt.type !== 'done' && evt.type !== 'error') {
+            setProc((p) => [...p, evt])
+          }
+        },
         onDone: () => setRunning(false),
         onError: (msg) => { setRunning(false); toast(msg, 'err') },
       })
@@ -941,6 +967,7 @@ function ContinueModal({ note, onClose, onDone, toast }: { note: NoteDetail; onC
           <button className="btn" onClick={() => { ctrlRef.current?.abort(); onClose() }}>关闭</button>
         </>
       }>
+      <ProcessTimeline events={proc} running={running} />
       <div className={`stream-box ${running && !text ? 'loading-dot' : ''}`}>
         <StreamMd text={text} streaming={running} />
       </div>

@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import process as _process
 
 
 @pytest.fixture()
@@ -47,7 +48,7 @@ def test_to_note_stream_saves_full_note(client, monkeypatch):
         for chunk in ("## 是什么\n", "特征值是伸缩倍数", "## 具体用处\n降维"):
             yield chunk
 
-    monkeypatch.setattr(terms_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_topic_note(client)
     term_path = _seed_term(client)
 
@@ -70,7 +71,7 @@ def test_to_note_rerun_overwrites_own_note(client, monkeypatch):
     async def fake_stream(provider_id, messages, model="", temperature=None):
         yield "第二版内容"
 
-    monkeypatch.setattr(terms_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_topic_note(client)
     term_path = _seed_term(client)
 
@@ -90,7 +91,7 @@ def test_to_note_falls_back_when_name_taken(client, monkeypatch):
     async def fake_stream(provider_id, messages, model="", temperature=None):
         yield "正文"
 
-    monkeypatch.setattr(terms_router, "stream_llm", fake_stream)
+    monkeypatch.setattr(_process, "stream_llm", fake_stream)
     _seed_topic_note(client)
     # 同名位置被一篇无关笔记占用
     client.post("/api/notes", json={"path": "高数/特征值.md", "content": "# 特征值\n手写的旧笔记"})

@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 from ..schemas import AttemptRequest, ExamGenerateRequest
 from ..services import exam_service, goals_store
-from ..services.llm_service import stream_llm
+from ..services.process import llm_call, step
 from .llm import sse_response
 
 router = APIRouter(prefix="/api", tags=["exams"])
@@ -32,14 +32,18 @@ async def stream_generate_exam(body: ExamGenerateRequest):
     )
 
     async def gen():
-        buf = []
-        async for delta in stream_llm(body.provider or "", messages, body.model or ""):
-            buf.append(delta)
-            yield {"type": "delta", "text": delta}
+        buf = ""
+        async for ev in llm_call(body.provider or "", messages, body.model or "",
+                                 purpose="出卷（选定资料 → 题目 JSON）"):
+            if ev["type"] == "delta":
+                buf += ev["text"]
+            yield ev
+        yield step("finalize", "start", "解析与落盘", f"{len(buf)} 字输出")
         exam = exam_service._finalize_exam(
-            "".join(buf), body.paths, used_titles, body.types,
+            buf, body.paths, used_titles, body.types,
             body.count, body.difficulty, body.language, body.title or "",
         )
+        yield step("finalize", "done", "解析与落盘", exam["title"])
         yield {"type": "done", "exam_id": exam["id"], "title": exam["title"],
                "count": len(exam["questions"])}
 
@@ -103,14 +107,24 @@ async def stream_submit_attempt(exam_id: str, body: AttemptRequest):
     """交卷流式：选择题即时判分；简答题并发评阅，完成一题推送一题
     （type=grade 事件），全部完成后 done 事件返回完整 attempt。"""
     plan = exam_service.prepare_attempt(exam_id, body.answers)
+    short_count = sum(1 for q in plan["questions"]
+                      if q.get("type") == "short" and str(q.get("id")) in plan["ans_map"])
 
     async def gen():
         grades: Dict[str, Dict] = {}
+        if short_count:
+            yield step("grade", "start", f"AI 评阅 {short_count} 道简答题")
+        done_grades = 0
         async for qid, grade in exam_service.grade_short_stream(
             plan["questions"], plan["ans_map"], plan["language"]
         ):
             grades[qid] = grade
+            done_grades += 1
+            yield step("grade", "done", f"简答评阅 {done_grades}/{short_count}",
+                       f"第 {done_grades} 题：{grade.get('score', '—')} 分")
             yield {"type": "grade", "question_id": qid, **grade}
+        if short_count:
+            yield step("grade", "done", f"AI 评阅 {short_count} 道简答题", "已完成")
         attempt = exam_service.finalize_attempt(plan, grades)
         yield {"type": "done", "attempt": attempt}
 
@@ -138,11 +152,15 @@ async def stream_generate_checklist(body: ChecklistRequest):
     messages, used = exam_service._checklist_messages(body.paths, body.language)
 
     async def gen():
-        buf = []
-        async for delta in stream_llm(body.provider or "", messages, body.model or ""):
-            buf.append(delta)
-            yield {"type": "delta", "text": delta}
-        doc = exam_service._finalize_checklist("".join(buf), body.paths, used)
+        buf = ""
+        async for ev in llm_call(body.provider or "", messages, body.model or "",
+                                 purpose="生成考点清单"):
+            if ev["type"] == "delta":
+                buf += ev["text"]
+            yield ev
+        yield step("finalize", "start", "解析与落盘", f"{len(buf)} 字输出")
+        doc = exam_service._finalize_checklist(buf, body.paths, used)
+        yield step("finalize", "done", "解析与落盘", f"{len(doc.get('items') or [])} 个考点")
         yield {"type": "done", "checklist": doc}
 
     return sse_response(gen())

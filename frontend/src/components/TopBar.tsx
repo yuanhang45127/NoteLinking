@@ -183,11 +183,12 @@ function ModelPicker() {
   if (curValue && !options.some((o) => o.value === curValue)) {
     options.unshift({ value: curValue, label: cur.model! })
   }
+  const curLabel = curValue ? (options.find((o) => o.value === curValue)?.label || cur.model!) : '默认模型'
 
   return (
     <select
       className="select-input model-picker"
-      title="选择 AI 模型（对所有 AI 功能生效）"
+      title={curValue ? `选择 AI 模型（对所有 AI 功能生效）\n当前：${curLabel}` : '选择 AI 模型（对所有 AI 功能生效）'}
       value={curValue}
       onChange={(e) => {
         const v = e.target.value

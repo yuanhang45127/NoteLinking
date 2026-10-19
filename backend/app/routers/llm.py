@@ -4,10 +4,12 @@
     data: {"type": "delta", "text": "..."}   # 增量文本
     data: {"type": "done"}                    # 结束（generate-note 会附带 saved_path）
     data: {"type": "error", "message": "..."} # 出错
+此外还穿插「调用过程」事件（llm_start / llm_done / tool / step），
+协议见 services/process.py，前端据此展示模型与工具调用过程。
 """
 import datetime
 import json
-from typing import AsyncIterator, Dict, List, Optional
+from typing import Dict, List
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -17,33 +19,61 @@ from ..schemas import (
     AskRequest, ChatRequest, GenerateNoteRequest, StudyGuideRequest,
     TopicArchitectureRequest, TopicScaffoldRequest, TutorChatRequest,
 )
-from ..services import vault, websearch_service
-from ..services.llm_service import LLMError, complete, stream_llm
+from ..services import call_log_store, gen_flows, vault, websearch_service
+from ..services.gen_flows import (
+    ASK_SYSTEM, NOTE_SYSTEM, save_generated,  # noqa: F401 (re-export 兼容旧引用)
+)
+from ..services.llm_service import LLMError, complete, get_provider
+from ..services.process import clear_session, set_session, strip_internal
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 
 
-def sse_response(gen):
+def sse_response(gen, flow: str = ""):
+    """SSE 包装；flow = 调用日志流程名（llm.py 各端点显式传入，
+    其余调用方缺省记 unknown——不猜测流程名）。
+
+    调用日志在 SSE 边界统一收口：每条事件（含流程直接 yield 的 tool 等）
+    在 yield 给客户端前记录一次；记录失败绝不影响流式输出。
+    """
+
     async def wrapper():
+        sid = ""
+        try:
+            # 先建会话再迭代生成器：生成器及其派生的子任务才会归入同一条记录
+            sid = await set_session(flow or "unknown")
+        except Exception:  # noqa: BLE001 — 开会话失败不影响流式输出
+            pass
+
+        async def _log(ev: dict) -> None:
+            if not sid:
+                return
+            try:
+                await call_log_store.record_event(sid, ev)
+            except Exception:  # noqa: BLE001 — 日志失败不影响流式输出
+                pass
+
         try:
             async for event in gen:
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                ev = strip_internal(event)
+                await _log(ev)
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
         except LLMError as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            err = {"type": "error", "message": str(e)}
+            await _log(err)
+            yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
         except Exception as e:  # noqa: BLE001
-            yield f"data: {json.dumps({'type': 'error', 'message': f'生成失败：{e}'}, ensure_ascii=False)}\n\n"
+            err = {"type": "error", "message": f"生成失败：{e}"}
+            await _log(err)
+            yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+        finally:
+            await clear_session()
 
     return StreamingResponse(
         wrapper(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-async def _delta_gen(agen) -> AsyncIterator[Dict]:
-    async for text in agen:
-        yield {"type": "delta", "text": text}
-    yield {"type": "done"}
 
 
 def _msg_list(messages: List[Dict]) -> List[Dict]:
@@ -54,19 +84,12 @@ def _msg_list(messages: List[Dict]) -> List[Dict]:
     return out
 
 
-def _note_topic_query(paths: List[str]) -> str:
-    """由笔记路径提取主题词作联网搜索 query（去掉目录与 .md 后缀）。"""
-    names = [p.rsplit("/", 1)[-1] for p in paths]
-    query = " ".join(n[:-3] if n.lower().endswith(".md") else n for n in names)
-    return query.strip()[:100]
-
-
 @router.get("/models")
 async def list_models(provider: str = ""):
     """拉取服务商的可用模型列表（OpenAI 兼容 / Anthropic / Gemini 三类协议）。"""
     import httpx
 
-    from ..services.llm_service import DEFAULT_BASE_URLS, LLMError, get_provider
+    from ..services.llm_service import DEFAULT_BASE_URLS
 
     try:
         p = get_provider(provider)
@@ -105,21 +128,10 @@ async def list_models(provider: str = ""):
 
 @router.post("/chat")
 async def chat(body: ChatRequest):
-    messages = _msg_list(body.messages)
     if body.stream:
-        return sse_response(_delta_gen(stream_llm(body.provider or "", messages, body.model or "", body.temperature)))
-    text = await complete(body.provider or "", messages, body.model or "", body.temperature)
+        return sse_response(gen_flows.chat_stream_events(body.model_dump()), "chat")
+    text = await complete(body.provider or "", _msg_list(body.messages), body.model or "", body.temperature)
     return {"text": text}
-
-
-NOTE_SYSTEM = (
-    "你是专业的学习笔记作者。请输出 GitHub 风格 Markdown 笔记正文（不要输出 frontmatter，"
-    "不要用代码围栏包住全文）。要求：结构清晰（用 ## 分节）、重点突出、"
-    "数学公式用 LaTeX（行内 $...$、独立 $$...$$）、代码用代码块、"
-    "关键术语首次出现可用 [[术语]] 双链语法标注。"
-    "若用户开启联网搜索，可适当补充资料中的最新进展，并在文末用 `## 参考来源` 小节"
-    "以 Markdown 列表列出用到的来源 URL。"
-)
 
 
 @router.post("/generate-note")
@@ -141,55 +153,22 @@ async def generate_note(body: GenerateNoteRequest):
     ]
 
     if body.stream:
-        async def gen():
-            buf = []
-            async for delta in stream_llm(body.provider or "", messages, body.model or ""):
-                buf.append(delta)
-                yield {"type": "delta", "text": delta}
-            if body.save_path:
-                text = "".join(buf)
-                saved = _save_generated(title or body.prompt[:30], text, body.save_path, body.language)
-                _backfill_web_links(saved["path"], text, web_results)
-                yield {"type": "done", "saved_path": saved["path"]}
-                return
-            yield {"type": "done"}
-
-        return sse_response(gen())
+        return sse_response(gen_flows.note_events(body.model_dump()), "generate-note")
 
     text = await complete(body.provider or "", messages, body.model or "")
     result = {"text": text}
     if body.save_path:
-        saved = _save_generated(title or body.prompt[:30], text, body.save_path, body.language)
-        _backfill_web_links(saved["path"], text, web_results)
+        saved = save_generated(title or body.prompt[:30], text, body.save_path, body.language)
+        gen_flows._backfill_web_links(saved["path"], text, web_results)
         result["saved_path"] = saved["path"]
     return result
 
 
-def _save_generated(title: str, text: str, save_path: str, language: str) -> Dict:
-    fm = {"title": title.strip() or "未命名笔记", "generated": True, "created": datetime.date.today().isoformat()}
-    content = ensure_frontmatter(f"# {fm['title']}\n", fm) + text.strip() + "\n"
-    return vault.create_note(save_path, content, overwrite=False)
-
-
-def _backfill_web_links(saved_path: str, text: str, web_results: List[Dict]) -> None:
-    """生成正文里用到的搜索来源，回填为笔记参考链接（frontmatter links）；失败不影响生成。"""
-    for r in web_results:
-        url = r.get("url") or ""
-        if url and url in text:
-            try:
-                vault.add_note_link(saved_path, r.get("title") or url, url, source="web_search")
-            except Exception:  # noqa: BLE001
-                pass
-
-
-ASK_SYSTEM = (
-    "你是耐心的学习助手。用户在阅读笔记时选中了一段看不懂的内容，"
-    "请结合上下文用平实的语言讲解，必要时举例或补充背景。"
-)
-
-
 @router.post("/ask")
 async def ask(body: AskRequest):
+    if body.stream:
+        return sse_response(gen_flows.ask_events(body.model_dump()), "ask")
+
     note = vault.read_note(body.path)
     lang = "请用中文回答。" if body.language == "zh" else f"请用 {body.language} 回答。"
     before = body.context_before.strip()[-800:]
@@ -203,23 +182,6 @@ async def ask(body: AskRequest):
         {"role": "system", "content": ASK_SYSTEM + lang},
         {"role": "user", "content": user},
     ]
-
-    if body.stream:
-        async def gen():
-            buf = []
-            async for delta in stream_llm(body.provider or "", messages, body.model or ""):
-                buf.append(delta)
-                yield {"type": "delta", "text": delta}
-            if body.save_to_note:
-                heading = f"问答记录（{datetime.datetime.now().isoformat(timespec='seconds')}）"
-                qa = f"**问：** {body.question.strip() or '讲解选中内容'}\n\n> {body.selected_text.strip()}\n\n**答：**\n\n{''.join(buf).strip()}"
-                saved = vault.save_note(body.path, append_section(note["content"], heading, qa), _force=True)
-                yield {"type": "done", "saved_path": saved["path"]}
-                return
-            yield {"type": "done"}
-
-        return sse_response(gen())
-
     text = await complete(body.provider or "", messages, body.model or "")
     result: Dict = {"text": text}
     if body.save_to_note:
@@ -232,6 +194,8 @@ async def ask(body: AskRequest):
 @router.post("/tutor-chat")
 async def tutor_chat(body: TutorChatRequest):
     """备考 AI 助教：把勾选的资料注入 system 上下文后对话（支持流式）。"""
+    if body.stream:
+        return sse_response(gen_flows.tutor_events(body.model_dump()), "tutor-chat")
     from ..services.exam_service import gather_context
 
     context, used = gather_context(body.paths)
@@ -247,9 +211,6 @@ async def tutor_chat(body: TutorChatRequest):
             system += block
     history = _msg_list(body.messages)[-12:]
     messages = [{"role": "system", "content": system}] + history
-
-    if body.stream:
-        return sse_response(_delta_gen(stream_llm(body.provider or "", messages, body.model or "", body.temperature)))
     text = await complete(body.provider or "", messages, body.model or "", body.temperature)
     return {"text": text}
 
@@ -260,7 +221,7 @@ async def study_guide(body: StudyGuideRequest):
 
     messages = _guide_messages(body.paths, body.language)
     if body.use_web:
-        block = await websearch_service.maybe_web_context(_note_topic_query(body.paths), True)
+        block = await websearch_service.maybe_web_context(gen_flows._web_query_from_paths(body.paths), True)
         if block:
             messages[-1]["content"] += block
     md = await complete(body.provider or "", messages, body.model or "")
@@ -275,30 +236,7 @@ async def study_guide(body: StudyGuideRequest):
 @router.post("/topic-architecture/stream")
 async def topic_architecture_stream(body: TopicArchitectureRequest):
     """主题整体架构：盘点主题内容 → 流式生成学习架构文档 → 落盘为主题下笔记。"""
-    import datetime
-
-    from ..services import arch_service, vault
-
-    overview = arch_service.topic_overview(body.topic)
-    messages = arch_service.arch_messages(overview, body.goal or "")
-    if body.use_web:
-        block = await websearch_service.maybe_web_context((body.goal or "").strip() or body.topic, True)
-        if block:
-            messages[-1]["content"] += block
-    title = f"{body.topic} · 整体架构"
-    save_path = body.save_path or f"{body.topic}/_架构/整体架构.md"
-
-    async def gen():
-        buf = []
-        async for delta in stream_llm(body.provider or "", messages, body.model or ""):
-            buf.append(delta)
-            yield {"type": "delta", "text": delta}
-        fm = {"title": title, "generated": True, "created": datetime.date.today().isoformat()}
-        content = ensure_frontmatter(f"# {title}\n", fm) + "".join(buf).strip() + "\n"
-        saved = vault.create_note(save_path, content, overwrite=True)
-        yield {"type": "done", "saved_path": saved["path"]}
-
-    return sse_response(gen())
+    return sse_response(gen_flows.arch_events(body.model_dump()), "topic-architecture")
 
 
 @router.post("/topic-architecture/scaffold")
@@ -317,70 +255,10 @@ async def topic_architecture_generate_notes(body: TopicScaffoldRequest):
     单篇失败不中断整批；笔记已存在时跳过（旧版落盘在叶子上一层目录的直接移入文件夹，不重复生成）；
     客户端断开即中止后续生成。
     """
-    from ..services import arch_service
-
-    chains = arch_service.arch_leaf_chains(body.topic, body.save_path)
-    provider, model = body.provider or "", body.model or ""
-
-    async def gen():
-        total = len(chains)
-        yield {"type": "start", "total": total}
-        created = failed = 0
-        for i, chain in enumerate(chains):
-            title = chain[-1]
-            # 与目录骨架一致：链上每个节点都是文件夹，笔记落在叶子文件夹内
-            rel = f"{body.topic}/{'/'.join(chain)}/{title}.md"
-            yield {"type": "note_start", "index": i, "total": total, "title": title}
-            try:
-                try:
-                    vault.read_note(rel)
-                    yield {"type": "note_skip", "index": i, "title": title, "reason": "已存在，跳过"}
-                    continue
-                except HTTPException as e:
-                    if e.status_code != 404:
-                        raise
-                # 兼容旧版落盘位置（平铺在叶子上一层目录）：移入文件夹即可，不重复生成
-                legacy = f"{body.topic}/{'/'.join(chain)}.md"
-                try:
-                    vault.move_note(legacy, rel)
-                    yield {"type": "note_skip", "index": i, "title": title, "reason": "旧位置笔记已移入文件夹"}
-                    continue
-                except HTTPException:
-                    pass
-                messages = arch_service.leaf_note_messages(body.topic, chain)
-                text = await complete(provider, messages, model)
-                saved = _save_generated(title, text, rel, "zh")
-                created += 1
-                yield {"type": "note_done", "index": i, "title": title, "path": saved["path"]}
-            except Exception as e:  # noqa: BLE001 单篇失败不中断整批
-                failed += 1
-                yield {"type": "note_error", "index": i, "title": title, "message": str(e)}
-        yield {"type": "done", "created": created, "failed": failed}
-
-    return sse_response(gen())
+    return sse_response(gen_flows.arch_notes_events(body.model_dump()), "generate-notes")
 
 
 @router.post("/study-guide/stream")
 async def study_guide_stream(body: StudyGuideRequest):
     """学习指南流式：SSE 增量输出 Markdown，结束时可选落盘。"""
-    from ..services.exam_service import _guide_messages
-
-    messages = _guide_messages(body.paths, body.language)
-    if body.use_web:
-        block = await websearch_service.maybe_web_context(_note_topic_query(body.paths), True)
-        if block:
-            messages[-1]["content"] += block
-
-    async def gen():
-        buf = []
-        async for delta in stream_llm(body.provider or "", messages, body.model or ""):
-            buf.append(delta)
-            yield {"type": "delta", "text": delta}
-        done: Dict = {"type": "done", "markdown": "".join(buf)}
-        if body.save_path:
-            fm = {"generated": True, "created": datetime.date.today().isoformat()}
-            saved = vault.create_note(body.save_path, ensure_frontmatter(done["markdown"], fm), overwrite=False)
-            done["saved_path"] = saved["path"]
-        yield done
-
-    return sse_response(gen())
+    return sse_response(gen_flows.study_guide_events(body.model_dump()), "study-guide")

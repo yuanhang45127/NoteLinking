@@ -12,8 +12,8 @@ from typing import AsyncIterator, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
-from . import chat_store, mcp_client, vault, websearch_service
-from .llm_service import complete, stream_llm
+from . import chat_store, mcp_client, process, vault, websearch_service
+from .llm_service import complete
 
 MAX_TOOL_ROUNDS = 6
 HISTORY_WINDOW = 20          # 送入模型的历史消息条数
@@ -416,7 +416,8 @@ async def run_turn(session_id: str, context_paths: List[str],
                    temperature: Optional[float] = None) -> AsyncIterator[Dict]:
     """执行一轮对话：流式输出 → 检出工具调用则执行回灌 → 循环 → 落库 → done。
 
-    事件：delta（增量文本）/ tool（status=start|done）/ done（带会话元信息与新消息）/ error。
+    事件：delta（增量文本）/ llm_start、llm_done（每次模型调用）/ tool（status=start|done，
+    done 带 summary 与 result 预览）/ step（建议标题等辅助步骤）/ done（带会话元信息与新消息）/ error。
     done 的 message 带 note_title（依据提问并行生成的建议笔记标题，可为空）。
     """
     session = chat_store.get_session(session_id)
@@ -426,23 +427,30 @@ async def run_turn(session_id: str, context_paths: List[str],
     question = session["messages"][-1]["content"]
     title_task = (asyncio.create_task(generate_note_title(question, provider_id, model, temperature))
                   if question.strip() else None)
+    if title_task is not None:
+        yield process.step("note_title", "start", "生成建议标题")
 
     full_text = ""
     tool_steps: List[Dict] = []
     for round_no in range(MAX_TOOL_ROUNDS + 1):
         buf = ""
-        async for delta in stream_llm(provider_id, messages, model, temperature):
-            buf += delta
-            yield {"type": "delta", "text": delta}
+        async for ev in process.llm_call(provider_id, messages, model, temperature,
+                                         purpose="回答" if round_no == 0 else "结合工具结果继续",
+                                         seq=round_no + 1):
+            if ev["type"] == "delta":
+                buf += ev["text"]
+            yield ev
         full_text += buf
         call = parse_tool_call(buf)
         if call is None or round_no == MAX_TOOL_ROUNDS:
             break
         yield {"type": "tool", "name": call["tool"], "args": call["args"], "status": "start"}
         ok, result, summary = execute_tool(call)
-        tool_steps.append({"name": call["tool"], "args": call["args"], "summary": summary, "ok": ok})
+        preview = result[:process.RESULT_PREVIEW_CHARS]
+        tool_steps.append({"name": call["tool"], "args": call["args"], "summary": summary,
+                           "ok": ok, "result": preview})
         yield {"type": "tool", "name": call["tool"], "args": call["args"],
-               "status": "done", "ok": ok, "summary": summary}
+               "status": "done", "ok": ok, "summary": summary, "result": preview}
         messages.append({"role": "assistant", "content": buf})
         messages.append({"role": "user", "content": f"[TOOL_RESULT] {call['tool']} →\n{result}\n\n请继续。"})
 
@@ -453,6 +461,7 @@ async def run_turn(session_id: str, context_paths: List[str],
             note_title = await title_task
         except Exception:  # noqa: BLE001 — 标题失败不影响回答落库
             note_title = ""
+        yield process.step("note_title", "done", "生成建议标题", note_title or "（未生成）")
     session = chat_store.append_message(session_id, "assistant", display,
                                         tool_steps=tool_steps or None, note_title=note_title)
     yield {

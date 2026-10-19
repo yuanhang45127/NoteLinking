@@ -1,4 +1,4 @@
-"""联网搜索服务：Tavily / Brave / Serper / SearXNG / MCP 五类服务商，以及网页正文抓取。
+"""联网搜索服务：Tavily / Brave / Serper / DeepSeek / SearXNG / MCP 六类服务商，以及网页正文抓取。
 
 搜索结果统一为 {"provider": ..., "results": [{"title", "url", "snippet"}]}；
 web_context_block 把结果格式化为可注入 prompt 的资料块。抓取失败、未配置等
@@ -187,6 +187,19 @@ async def search(query: str, max_results: Optional[int] = None) -> Dict:
         )
         raw = data.get("organic") or []
         results = [_norm(r.get("title"), r.get("link"), r.get("snippet")) for r in raw if isinstance(r, dict)]
+    elif provider == "deepseek":
+        if not key:
+            raise WebSearchError("未配置 DeepSeek API Key，请先在「设置 → 联网搜索」填写")
+        data = await _post_json(
+            "https://api.deepseek.com/v1/tools/search",
+            {"query": q, "count": n},
+            {"Authorization": f"Bearer {key}"},
+        )
+        raw = data.get("results") or []
+        # DeepSeek 每条含 snippet(短摘要)/summary(长摘要)，need_content=True 才有正文；这里取长摘要优先
+        results = [_norm(r.get("title"), r.get("url"),
+                         r.get("summary") or r.get("snippet") or r.get("content"))
+                   for r in raw if isinstance(r, dict)]
     elif provider == "searxng":
         base = str(cfg.get("base_url") or "").strip().rstrip("/")
         if not base:

@@ -14,10 +14,11 @@ export interface TreeNode {
   type: 'dir' | 'note' | 'term' | 'file'
   title?: string
   finished?: boolean
+  updated_at?: string
   children?: TreeNode[]
 }
 
-/** 置顶笔记（侧边栏顶部「置顶」区，跨主题） */
+/** 置顶 / 收藏笔记（侧边栏顶部「置顶」「收藏」区，跨主题；两者后端返回结构相同） */
 export interface PinnedNote {
   path: string
   name: string
@@ -237,6 +238,37 @@ export interface ChatToolStep {
   ok: boolean
   /** 流式中刚发起、还没返回结果的步骤 */
   running?: boolean
+  /** 工具返回结果预览（后端截断） */
+  result?: string
+}
+
+/** 「调用过程」事件（后端 SSE，协议见 backend app/services/process.py） */
+export interface ProcessEvt {
+  type: 'llm_start' | 'llm_done' | 'tool' | 'step' | string
+  [k: string]: any
+}
+
+/** 调用记录列表项（设置 → 调用记录，GET /api/call-logs，新→旧） */
+export interface CallLogEntry {
+  id: string
+  ts: string
+  flow: string
+  purpose: string
+  llm_calls: number
+  tool_calls: number
+  steps: number
+  models: string[]
+}
+
+/** 调用记录详情（GET /api/call-logs/{id}）：列表项 + 摘要 + 完整过程事件（delta 已合并） */
+export interface CallLogRecord extends CallLogEntry {
+  summary: Record<string, any>
+  events: ProcessEvt[]
+}
+
+/** 流式中的 assistant 消息：附带实时过程事件（不落库，done 后由最终消息接替） */
+export interface LiveMsg extends ChatSessionMsg {
+  process?: ProcessEvt[]
 }
 
 export interface ChatSessionMsg {
@@ -244,8 +276,6 @@ export interface ChatSessionMsg {
   content: string
   created_at?: string
   tool_steps?: ChatToolStep[]
-  /** 后端随回答生成的建议笔记标题（依据提问并行生成），预填「存为笔记」 */
-  note_title?: string
 }
 
 export interface ChatSessionMeta {

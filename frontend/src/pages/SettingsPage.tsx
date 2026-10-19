@@ -4,6 +4,7 @@ import { api } from '../api'
 import { useApp } from '../store'
 import type { McpServer, Provider, Settings } from '../types'
 import Modal from '../components/Modal'
+import CallLogViewer from '../components/CallLogViewer'
 import { IconDownload, IconEdit, IconFilePdf, IconPlus, IconTrash } from '../components/Icons'
 
 const TABS = [
@@ -15,6 +16,7 @@ const TABS = [
   { key: 'mcp', label: 'MCP 服务器' },
   { key: 'graph', label: '双链与图谱' },
   { key: 'kimi', label: 'Kimi Code' },
+  { key: 'call-logs', label: '调用记录' },
   { key: 'io', label: '导入与导出' },
 ]
 
@@ -39,6 +41,7 @@ export default function SettingsPage() {
         {tab === 'mcp' && <McpPanel />}
         {tab === 'graph' && <GraphPanel />}
         {tab === 'kimi' && <KimiPanel />}
+        {tab === 'call-logs' && <CallLogViewer />}
         {tab === 'io' && <IoPanel />}
         {tab === 'general' && <GeneralPanel />}
         {tab === 'topics' && <TopicsPanel />}
@@ -389,14 +392,16 @@ function WebSearchPanel() {
       <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
         <div>
           <div className="sl-text">搜索服务商</div>
-          <div className="sl-sub">Tavily / Brave / Serper 需申请 API Key；SearXNG 用自建实例、无需 Key；MCP 用「MCP 服务器」里配置的外部搜索工具</div>
+          <div className="sl-sub">Tavily / Brave / Serper / DeepSeek 需申请 API Key；SearXNG 用自建实例、无需 Key；MCP 用「MCP 服务器」里配置的外部搜索工具</div>
         </div>
         <select className="select-input" value={ws.provider}
           onChange={(e) => { setWs({ ...ws, provider: e.target.value }); setDirty(true) }}>
           <option value="tavily">Tavily</option>
           <option value="brave">Brave</option>
           <option value="serper">Serper</option>
+          <option value="deepseek">DeepSeek 搜索</option>
           <option value="searxng">SearXNG</option>
+          <option value="kimi">Kimi（Kimi Code 订阅）</option>
           <option value="mcp">MCP 服务器</option>
         </select>
       </div>
@@ -420,7 +425,15 @@ function WebSearchPanel() {
           </div>
         </>
       )}
-      {ws.provider !== 'mcp' && (
+      {ws.provider === 'kimi' && (
+        <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div>
+            <div className="sl-text">Kimi Code 凭证</div>
+            <div className="sl-sub">无需 API Key：直接复用服务器上 Kimi Code 的登录凭证（本服务自动续期，需 Kimi Code 保持登录）</div>
+          </div>
+        </div>
+      )}
+      {ws.provider !== 'mcp' && ws.provider !== 'kimi' && (
         <div className="setting-line" style={{ borderBottom: '1px solid var(--border)' }}>
           <div>
             <div className="sl-text">API Key {ws.has_key && <span style={{ color: 'var(--ok)' }}>（已配置）</span>}</div>

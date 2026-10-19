@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { getModelOverride, streamUrls } from '../api'
-import { streamTracked } from '../lib/aiTasks'
+import { getModelOverride } from '../api'
+import { streamTrackedDetached } from '../lib/aiTasks'
+import type { ProcessEvt } from '../types'
 import Modal from './Modal'
+import ProcessTimeline from './ProcessTimeline'
 import StreamMd from './StreamMd'
 
-/** 概念解释流式生成弹窗：增量展示，落盘后回调 onDone(savedPath)。「后台」收起弹窗继续跑。 */
+/** 概念解释流式生成弹窗：增量展示 + 调用过程时间线，落盘后回调 onDone(savedPath)。「后台」收起弹窗继续跑。 */
 export default function TermStreamModal({ path, term, contextBefore, contextAfter, regenerate, onClose, onDone }: {
   path: string
   term: string
@@ -18,6 +20,7 @@ export default function TermStreamModal({ path, term, contextBefore, contextAfte
   const [savedPath, setSavedPath] = useState('')
   const [err, setErr] = useState('')
   const [bg, setBg] = useState(false)
+  const [proc, setProc] = useState<ProcessEvt[]>([])
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
   const doneRef = useRef(onDone)
   doneRef.current = onDone
@@ -32,15 +35,20 @@ export default function TermStreamModal({ path, term, contextBefore, contextAfte
   }
 
   useEffect(() => {
-    const t = streamTracked(
+    const t = streamTrackedDetached(
       { title: `${regenerate ? '重新生成' : '生成'}概念 · ${term}`, kind: 'term', foreground },
-      streamUrls.term, {
+      'term', {
         path, term, stream: true, regenerate: !!regenerate,
         context_before: contextBefore, context_after: contextAfter,
         ...getModelOverride(),
       },
       {
         onDelta: (x) => setText((s) => s + x),
+        onEvent: (evt) => {
+          if (evt.type !== 'delta' && evt.type !== 'done' && evt.type !== 'error') {
+            setProc((p) => [...p, evt])
+          }
+        },
         onDone: (evt) => {
           if (evt?.saved_path) {
             setSavedPath(evt.saved_path)
@@ -77,6 +85,7 @@ export default function TermStreamModal({ path, term, contextBefore, contextAfte
         </>
       }>
       {err && <div style={{ color: 'var(--err)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
+      <ProcessTimeline events={proc} running={!savedPath && !err} />
       <div className={`stream-box ${!text && !err ? 'loading-dot' : ''}`}>
         <StreamMd text={text} streaming={!savedPath && !err} />
       </div>

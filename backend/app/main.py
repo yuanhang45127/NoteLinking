@@ -19,9 +19,11 @@ from starlette.exceptions import HTTPException
 from . import config
 from .config import get_annotations_dir, get_checklists_dir, get_exams_dir, get_vault_dir
 from .routers import (
+    ai_tasks,
     annotations,
     auth,
     books,
+    call_logs,
     chat,
     exams,
     graph,
@@ -37,7 +39,7 @@ from .routers import (
     topics,
     web,
 )
-from .services import auth_service, mcp_client
+from .services import ai_task_store, auth_service, mcp_client
 from .services.llm_service import LLMError
 from .services.websearch_service import WebSearchError
 
@@ -50,6 +52,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     get_annotations_dir()
     get_exams_dir()
     get_checklists_dir()
+    ai_task_store.load_persisted()
     yield
     mcp_client.shutdown_all()
 
@@ -144,6 +147,7 @@ app.include_router(notes.router)
 app.include_router(chat.router)
 app.include_router(papers.router)
 app.include_router(books.router)
+app.include_router(call_logs.router)
 app.include_router(annotations.router)
 app.include_router(llm.router)
 app.include_router(terms.router)
@@ -153,6 +157,7 @@ app.include_router(importer.router)
 app.include_router(settings.router)
 app.include_router(integrations.router)
 app.include_router(mcp.router)
+app.include_router(ai_tasks.router)
 app.include_router(misc.router)
 app.include_router(web.router)
 

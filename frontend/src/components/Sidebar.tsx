@@ -8,8 +8,9 @@ import {
   IconFolderOpen, IconGear, IconGraph, IconGrad, IconNote, IconPlus,
 } from './Icons'
 import Modal from './Modal'
+import ProcessTimeline from './ProcessTimeline'
 import StreamMd from './StreamMd'
-import type { PinnedNote, TreeNode } from '../types'
+import type { PinnedNote, ProcessEvt, TreeNode } from '../types'
 
 const EMOJI_CHOICES = [
   '📚', '📖', '📝', '✏️', '🧮', '🔢', '🧠', '💡',
@@ -35,10 +36,16 @@ export default function Sidebar() {
   const [moving, setMoving] = useState(false)
   // 置顶笔记（跨主题，显示在目录树上方；置顶的笔记不再出现在主题树里）
   const [pinned, setPinned] = useState<PinnedNote[]>([])
+  // 收藏笔记（跨主题，显示在「置顶」区下方；收藏的笔记仍保留在主题树里）
+  const [favList, setFavList] = useState<PinnedNote[]>([])
   // 单行 ⋮ 菜单
-  const [rowMenu, setRowMenu] = useState<{ path: string; name: string; isTerm: boolean; pinned: boolean; finished: boolean; x: number; y: number } | null>(null)
+  const [rowMenu, setRowMenu] = useState<{ path: string; name: string; isTerm: boolean; pinned: boolean; fav: boolean; finished: boolean; x: number; y: number } | null>(null)
   // 按架构批量生成笔记
   const [genNotes, setGenNotes] = useState<{ topic: string; savePath: string } | null>(null)
+  // 新建主题二级菜单「⬆ md」：选完 md 文件即创建主题并批量导入
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const importTopicRef = useRef('')
+  const [importing, setImporting] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -68,11 +75,16 @@ export default function Sidebar() {
     return () => document.removeEventListener('mousedown', close)
   }, [rowMenu])
 
-  // 置顶列表跟随目录树刷新（生成/移动/删除笔记后都会 refreshTree）
+  // 置顶 / 收藏列表跟随目录树刷新（生成/移动/删除笔记后都会 refreshTree）；
+  // alive 守卫：tree 连续变化时丢弃过期响应，避免后到的旧数据覆盖新列表
   useEffect(() => {
-    api.pinned().then((r) => setPinned(r.pinned)).catch(() => {})
+    let alive = true
+    api.pinned().then((r) => { if (alive) setPinned(r.pinned) }).catch(() => {})
+    api.favorites().then((r) => { if (alive) setFavList(r.favorites) }).catch(() => {})
+    return () => { alive = false }
   }, [tree])
   const pinnedPaths = useMemo(() => new Set(pinned.map((p) => p.path)), [pinned])
+  const favPaths = useMemo(() => new Set(favList.map((f) => f.path)), [favList])
   // 已看完的笔记路径（树 + 置顶区都可能有）
   const finishedPaths = useMemo(() => {
     const s = new Set<string>()
@@ -136,7 +148,7 @@ export default function Sidebar() {
     // 钳制在视口内：靠下的笔记菜单不溢出屏幕底部
     const x = Math.min(Math.max(8, rect.right - 150), window.innerWidth - 148)
     const y = Math.min(rect.bottom + 4, window.innerHeight - 150)
-    setRowMenu({ path, name, isTerm, pinned: pinnedPaths.has(path), finished, x, y })
+    setRowMenu({ path, name, isTerm, pinned: pinnedPaths.has(path), fav: favPaths.has(path), finished, x, y })
   }
 
   const togglePin = async (path: string) => {
@@ -145,6 +157,16 @@ export default function Sidebar() {
       await api.setNotePin(path, next)
       setRowMenu(null)
       toast(next ? '已置顶，显示在目录顶部' : '已取消置顶')
+      await refreshTree()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const toggleFav = async (path: string) => {
+    const next = !favPaths.has(path)
+    try {
+      await api.setNoteFav(path, next)
+      setRowMenu(null)
+      toast(next ? '已收藏' : '已取消收藏')
       await refreshTree()
     } catch (e: any) { toast(e.message, 'err') }
   }
@@ -251,6 +273,38 @@ export default function Sidebar() {
     } catch (e: any) { toast(e.message, 'err') }
   }
 
+  // 文件框必须与点击在同一用户手势内打开，否则 await 之后浏览器会拦截弹窗；
+  // 所以先弹框选文件，选完再创建主题并上传——取消选择就什么都不发生
+  const createTopicWithImport = () => {
+    const name = newTopic.trim()
+    if (!name) return
+    importTopicRef.current = name
+    importInputRef.current?.click()
+  }
+
+  const onImportFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''
+    const name = importTopicRef.current
+    importTopicRef.current = ''
+    if (!files.length || !name) return
+    setImporting(true)
+    try {
+      try {
+        await api.createTopic(name)
+        await refreshTopics()
+      } catch (err: any) {
+        if (err.code !== 409) throw err  // 主题已存在时直接往里导
+      }
+      setActiveTopic(name)
+      const res = await api.importMd(files, name)
+      const bad = res.failed.length ? `，失败 ${res.failed.length} 个` : ''
+      toast(`主题「${name}」已导入 ${res.imported.length} 篇笔记${bad}`, res.failed.length ? 'err' : 'ok')
+      await refreshTree()
+    } catch (err: any) { toast(err.message || '导入失败', 'err') }
+    finally { setImporting(false) }
+  }
+
   const pickEmoji = async (emoji: string) => {
     if (!emojiFor) return
     try {
@@ -321,7 +375,7 @@ export default function Sidebar() {
         </button>
         {menuOpen && (
           <div className="topic-menu" onMouseLeave={() => setMenuOpen(false)}>
-            {topics.map((t) => (
+            {[...topics].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).map((t) => (
               <button key={t.path} className={t.name === activeTopic ? 'sel' : ''}
                 onClick={() => { setActiveTopic(t.name); setMenuOpen(false) }}>
                 {t.name === activeTopic ? <IconCheck size={15} /> : <span style={{ width: 15 }} />}
@@ -381,6 +435,29 @@ export default function Sidebar() {
             ))}
           </div>
         )}
+        {!!favList.length && (
+          <div className="pin-section">
+            <div className="pin-label">⭐ 收藏</div>
+            {favList.map((n) => (
+              <div key={n.path} className={`tree-row-wrap ${currentPath === n.path ? 'active' : ''}`}>
+                <button className={`tree-row ${n.finished ? 'finished' : ''}`} title={n.path}
+                  onClick={() => navigate(`${n.type === 'term' ? '/concept' : '/notes'}?path=${encodeURIComponent(n.path)}`)}>
+                  <span className={n.type === 'term' ? 'icon-concept' : 'icon-note'}>
+                    {n.type === 'term' ? <IconConcept size={15} /> : <IconDoc size={15} />}
+                  </span>
+                  <span className="fav-mark" title="已收藏">⭐</span>
+                  <span className="name">{n.title || n.name}</span>
+                  {n.finished && <span className="finished-mark" title="已看完">✅</span>}
+                  {n.topic !== activeTopic && <span className="pin-topic">{n.topic}</span>}
+                </button>
+                <button className="row-menu" title="更多操作"
+                  onClick={(e) => { e.stopPropagation(); openRowMenu(n.path, n.name, n.type === 'term', !!n.finished, e) }}>
+                  ⋮
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {activeTopic && (
           <TreeFolder
             node={tree}
@@ -393,6 +470,7 @@ export default function Sidebar() {
             onMenu={openRowMenu}
             onDropNote={selectMode ? undefined : dropNoteInto}
             hidePaths={pinnedPaths}
+            favPaths={favPaths}
           />
         )}
         {!activeTopic && <div className="side-hint">创建主题后，这里会显示对应主题的文件目录。</div>}
@@ -435,6 +513,9 @@ export default function Sidebar() {
         <div className="side-hint">图谱由双链自动生成，随笔记与概念文档实时更新。</div>
       )}
 
+      <input ref={importInputRef} type="file" multiple accept=".md,text/markdown,text/plain"
+        style={{ display: 'none' }} onChange={onImportFiles} />
+
       <div className="side-footer" ref={createRef}>
         {!creating ? (
           <button className="quick-item" onClick={() => { setCreating(true); setNewTopic('') }}>
@@ -448,6 +529,8 @@ export default function Sidebar() {
             <button className="btn primary small" onClick={createTopic}>创建</button>
             <button className="btn small" title="创建主题并用 AI 生成整体架构笔记"
               disabled={!newTopic.trim()} onClick={createTopicWithArchitecture}>✦ 架构</button>
+            <button className="btn small" title="创建主题，并把选中的 .md 文件批量导入为主题笔记"
+              disabled={!newTopic.trim() || importing} onClick={createTopicWithImport}>⬆ md</button>
           </div>
         )}
       </div>
@@ -468,6 +551,9 @@ export default function Sidebar() {
           <button onClick={() => togglePin(rowMenu.path)}>
             {rowMenu.pinned ? '📍 取消置顶' : '📌 置顶'}
           </button>
+          <button onClick={() => toggleFav(rowMenu.path)}>
+            {rowMenu.fav ? '☆ 取消收藏' : '⭐ 收藏'}
+          </button>
           <button onClick={() => toggleFinish(rowMenu.path)}>
             {rowMenu.finished ? '↩️ 取消看完' : '✅ 标记看完'}
           </button>
@@ -479,7 +565,24 @@ export default function Sidebar() {
   )
 }
 
-function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCheck, onMenu, onDropNote, hidePaths }: {
+/** 目录子项排序：目录在前；笔记/概念按 updated_at 倒序（新的在前，缺省回退按名称），已看完的沉到底部。
+ * 返回新数组，不修改传入的 children（props 不可变）。 */
+function sortTree(children: TreeNode[]): TreeNode[] {
+  return [...children].sort((a, b) => {
+    const aDir = a.type === 'dir'
+    const bDir = b.type === 'dir'
+    if (aDir !== bDir) return aDir ? -1 : 1 // 目录在前
+    const aFin = !!a.finished
+    const bFin = !!b.finished
+    if (aFin !== bFin) return aFin ? 1 : -1 // 已看完的笔记排最后
+    const ta = a.updated_at || ''
+    const tb = b.updated_at || ''
+    if (ta !== tb) return ta < tb ? 1 : -1 // updated_at 倒序（新的在前）
+    return a.name.localeCompare(b.name) // 无时间戳回退按名称
+  })
+}
+
+function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCheck, onMenu, onDropNote, hidePaths, favPaths }: {
   node: TreeNode | null
   topic: string
   currentPath: string
@@ -490,6 +593,7 @@ function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCh
   onMenu: (path: string, name: string, isTerm: boolean, finished: boolean, e: React.MouseEvent) => void
   onDropNote?: (src: string, dstDir: string) => void
   hidePaths?: Set<string>
+  favPaths?: Set<string>
 }) {
   const [dropping, setDropping] = useState(false)
   const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => {
@@ -503,17 +607,18 @@ function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCh
     })
   }
   const renderChildren = (children: TreeNode[]) =>
-    children
-      .filter((child) => child.type === 'dir' || !hidePaths?.has(child.path)) // 置顶笔记只在顶部「置顶」区显示
+    sortTree(children.filter((child) => child.type === 'dir' || !hidePaths?.has(child.path))) // 置顶笔记只在顶部「置顶」区显示；其余按更新时间倒序、看完的沉底
       .map((child) =>
         child.type === 'dir' ? (
           <TreeFolder key={child.path} node={child} topic={topic} currentPath={currentPath} depth={depth + 1}
             selectMode={selectMode} checked={checked} onCheck={onCheck} onMenu={onMenu} onDropNote={onDropNote}
-            hidePaths={hidePaths} />
+            hidePaths={hidePaths} favPaths={favPaths} />
+        ) : child.type === 'file' ? (
+          <TreeFile key={child.path} node={child} />
         ) : (
           <TreeLeaf key={child.path} node={child} currentPath={currentPath}
             selectMode={selectMode} checked={checked.has(child.path)} onCheck={onCheck} onMenu={onMenu}
-            canDrag={!!onDropNote} />
+            canDrag={!!onDropNote} favPaths={favPaths} />
         ),
       )
 
@@ -549,7 +654,23 @@ function TreeFolder({ node, topic, currentPath, depth, selectMode, checked, onCh
   )
 }
 
-function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu, canDrag }: {
+function TreeFile({ node }: { node: TreeNode }) {
+  // 库内图片/附件：点击经资产接口在新标签页打开（<img>/新标签带不了令牌头，走 ?token=）
+  const open = () => {
+    const site = localStorage.getItem('nl-token') || ''
+    window.open(`/api/notes/asset?path=${encodeURIComponent(node.path)}&token=${encodeURIComponent(site)}`, '_blank')
+  }
+  return (
+    <div className="tree-row-wrap">
+      <button className="tree-row" onClick={open} title={`${node.path}（点击查看原图）`}>
+        <span className="icon-note">🖼️</span>
+        <span className="name">{node.name}</span>
+      </button>
+    </div>
+  )
+}
+
+function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu, canDrag, favPaths }: {
   node: TreeNode
   currentPath: string
   selectMode: boolean
@@ -557,6 +678,7 @@ function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu, can
   onCheck: (path: string) => void
   onMenu: (path: string, name: string, isTerm: boolean, finished: boolean, e: React.MouseEvent) => void
   canDrag?: boolean
+  favPaths?: Set<string>
 }) {
   const navigate = useNavigate()
   const isTerm = node.type === 'term'
@@ -595,6 +717,7 @@ function TreeLeaf({ node, currentPath, selectMode, checked, onCheck, onMenu, can
         {isTerm
           ? <span className="icon-concept"><IconConcept size={15} /></span>
           : <span className="icon-note"><IconDoc size={15} /></span>}
+        {favPaths?.has(node.path) && <span className="fav-mark" title="已收藏">⭐</span>}
         <span className="name">{node.name}{!isTerm && <span className="ext">.md</span>}</span>
         {node.finished && <span className="finished-mark" title="已看完">✅</span>}
         {isTerm && <span className="kind-tag">概念</span>}
@@ -617,6 +740,7 @@ function ArchitectureModal({ topic, onClose, onGenerateNotes }: {
   const [savedPath, setSavedPath] = useState('')
   const [err, setErr] = useState('')
   const [bg, setBg] = useState(false)
+  const [proc, setProc] = useState<ProcessEvt[]>([])
   const ctrlRef = useRef<{ abort: () => void } | null>(null)
   const navigate = useNavigate()
   const { refreshTree, toast } = useApp()
@@ -653,6 +777,11 @@ function ArchitectureModal({ topic, onClose, onGenerateNotes }: {
       },
       {
         onDelta: (x) => setText((s) => s + x),
+        onEvent: (evt) => {
+          if (evt.type !== 'delta' && evt.type !== 'done' && evt.type !== 'error') {
+            setProc((p) => [...p, evt])
+          }
+        },
         onDone: (evt) => {
           if (evt?.saved_path) {
             setSavedPath(evt.saved_path)
@@ -693,6 +822,7 @@ function ArchitectureModal({ topic, onClose, onGenerateNotes }: {
       }>
       {err && <div style={{ color: 'var(--err)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
       {savedPath && <div style={{ color: 'var(--ok)', fontSize: 13, marginBottom: 8 }}>已保存为笔记：{savedPath}</div>}
+      <ProcessTimeline events={proc} running={!savedPath && !err} />
       <div className={`stream-box ${!text && !err ? 'loading-dot' : ''}`} style={{ maxHeight: 460, overflow: 'auto' }}>
         <StreamMd text={text} streaming={!savedPath && !err} />
       </div>
